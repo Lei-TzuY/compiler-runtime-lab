@@ -1,0 +1,779 @@
+#include "minicc.h"
+
+// codegen.c
+
+static int depth;
+static char *argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8",  "%r9"};
+static char *argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
+static char *argreg16[] = {"%di",  "%si",  "%dx",  "%cx",  "%r8w", "%r9w"};
+static char *argreg8[]  = {"%dil", "%sil", "%dl",  "%cl",  "%r8b", "%r9b"};
+static char *current_fn;
+static char *brk_label;
+static char *cnt_label;
+
+static void gen_expr(Node *node);
+static int count(void);
+
+static void push(void) {
+    printf("  push %%rax\n");
+    depth++;
+}
+
+static void pop(char *arg) {
+    printf("  pop %s\n", arg);
+    depth--;
+}
+
+static void load(Type *ty) {
+    if (ty->kind == TY_ARRAY || ty->kind == TY_STRUCT || ty->kind == TY_FUNC)
+        return; // arrays/structs/functions decay to address
+
+    if (ty->kind == TY_BOOL)
+        printf("  movzbq (%%rax), %%rax\n");
+    else if (ty->kind == TY_CHAR) {
+        if (ty->is_unsigned)
+            printf("  movzbq (%%rax), %%rax\n");
+        else
+            printf("  movsbq (%%rax), %%rax\n");
+    } else if (ty->kind == TY_SHORT) {
+        if (ty->is_unsigned)
+            printf("  movzwq (%%rax), %%rax\n");
+        else
+            printf("  movswq (%%rax), %%rax\n");
+    } else if (ty->kind == TY_INT) {
+        if (ty->is_unsigned)
+            printf("  mov (%%rax), %%eax\n");
+        else
+            printf("  movslq (%%rax), %%rax\n");
+    } else
+        printf("  mov (%%rax), %%rax\n");
+}
+
+static void store(Type *ty) {
+    pop("%rdi");
+    if (ty->kind == TY_BOOL) {
+        // _Bool: any non-zero value becomes 1
+        printf("  cmp $0, %%rax\n");
+        printf("  setne %%al\n");
+        printf("  movzb %%al, %%rax\n");
+        printf("  mov %%al, (%%rdi)\n");
+    } else if (ty->kind == TY_CHAR) {
+        printf("  mov %%al, (%%rdi)\n");
+    } else if (ty->kind == TY_SHORT) {
+        printf("  mov %%ax, (%%rdi)\n");
+    } else if (ty->kind == TY_INT) {
+        printf("  mov %%eax, (%%rdi)\n");
+    } else if (ty->kind == TY_STRUCT) {
+        int i = 0;
+        for (; i + 8 <= ty->size; i += 8) {
+            printf("  mov %d(%%rax), %%rsi\n", i);
+            printf("  mov %%rsi, %d(%%rdi)\n", i);
+        }
+        for (; i + 4 <= ty->size; i += 4) {
+            printf("  mov %d(%%rax), %%esi\n", i);
+            printf("  mov %%esi, %d(%%rdi)\n", i);
+        }
+        for (; i < ty->size; i++) {
+            printf("  movzb %d(%%rax), %%rsi\n", i);
+            printf("  mov %%sil, %d(%%rdi)\n", i);
+        }
+    } else {
+        printf("  mov %%rax, (%%rdi)\n");
+    }
+}
+
+static void normalize(Type *ty) {
+    if (ty->kind == TY_BOOL) {
+        printf("  cmp $0, %%rax\n");
+        printf("  setne %%al\n");
+        printf("  movzb %%al, %%rax\n");
+    } else if (ty->kind == TY_CHAR) {
+        if (ty->is_unsigned)
+            printf("  movzbq %%al, %%rax\n");
+        else
+            printf("  movsbq %%al, %%rax\n");
+    } else if (ty->kind == TY_SHORT) {
+        if (ty->is_unsigned)
+            printf("  movzwq %%ax, %%rax\n");
+        else
+            printf("  movswq %%ax, %%rax\n");
+    } else if (ty->kind == TY_INT) {
+        if (ty->is_unsigned)
+            printf("  mov %%eax, %%eax\n");
+        else
+            printf("  movslq %%eax, %%rax\n");
+    }
+}
+
+static void gen_addr(Node *node) {
+    if (node->kind == ND_VAR) {
+        if (node->var->is_local)
+            printf("  lea %d(%%rbp), %%rax\n", node->var->offset);
+        else
+            printf("  lea %s(%%rip), %%rax\n", node->var->name);
+        return;
+    }
+    if (node->kind == ND_DEREF) {
+        gen_expr(node->lhs);
+        return;
+    }
+    if (node->kind == ND_MEMBER) {
+        gen_addr(node->lhs);
+        printf("  add $%d, %%rax\n", node->member->offset);
+        return;
+    }
+
+    error("not an lvalue");
+}
+
+static void gen_inc_dec(Node *node, bool increment, bool return_old) {
+    int step;
+    if (node->ty->kind == TY_PTR)
+        step = node->ty->base->size;
+    else
+        step = 1;
+
+    gen_addr(node->lhs);
+    push();
+    load(node->ty);
+    if (return_old)
+        printf("  mov %%rax, %%rsi\n");
+
+    if (increment)
+        printf("  add $%d, %%rax\n", step);
+    else
+        printf("  sub $%d, %%rax\n", step);
+
+    store(node->ty);
+    normalize(node->ty);
+    if (return_old)
+        printf("  mov %%rsi, %%rax\n");
+}
+
+static void gen_compound_assign(Node *node) {
+    gen_addr(node->lhs);
+    push();
+    load(node->ty);
+    push();
+    gen_expr(node->rhs);
+    printf("  mov %%rax, %%rsi\n");
+    pop("%rax");
+
+    switch (node->kind) {
+    case ND_ADD_EQ: printf("  add %%rsi, %%rax\n"); break;
+    case ND_SUB_EQ: printf("  sub %%rsi, %%rax\n"); break;
+    case ND_MUL_EQ: printf("  imul %%rsi, %%rax\n"); break;
+    case ND_DIV_EQ:
+        printf("  cqo\n");
+        printf("  idiv %%rsi\n");
+        break;
+    case ND_MOD_EQ:
+        printf("  cqo\n");
+        printf("  idiv %%rsi\n");
+        printf("  mov %%rdx, %%rax\n");
+        break;
+    case ND_AND_EQ: printf("  and %%rsi, %%rax\n"); break;
+    case ND_OR_EQ:  printf("  or %%rsi, %%rax\n"); break;
+    case ND_XOR_EQ: printf("  xor %%rsi, %%rax\n"); break;
+    case ND_SHL_EQ:
+        printf("  mov %%rsi, %%rcx\n");
+        printf("  shl %%cl, %%rax\n");
+        break;
+    case ND_SHR_EQ:
+        printf("  mov %%rsi, %%rcx\n");
+        printf("  sar %%cl, %%rax\n");
+        break;
+    default: error("invalid compound assignment");
+    }
+
+    store(node->ty);
+    normalize(node->ty);
+}
+
+// Generate a function call (direct or indirect via function pointer)
+static void gen_funcall(Node *node) {
+    bool indirect = (node->funcname == NULL);
+
+    // For indirect calls, evaluate callee first and save to stack
+    if (indirect) {
+        gen_expr(node->lhs);
+        push(); // save function address on stack
+    }
+
+    int nargs = 0;
+    for (Node *arg = node->args; arg; arg = arg->next) {
+        gen_expr(arg);
+        push();
+        nargs++;
+    }
+    if (nargs > 6)
+        error("too many arguments");
+
+    for (int i = nargs - 1; i >= 0; i--)
+        pop(argreg64[i]);
+
+    int c = count();
+
+    if (indirect) {
+        // Pop callee address into %r10
+        pop("%r10");
+        printf("  mov %%rsp, %%rax\n");
+        printf("  and $15, %%rax\n");
+        printf("  jnz .L.call.%d\n", c);
+        printf("  mov $0, %%rax\n");
+        printf("  call *%%r10\n");
+        printf("  jmp .L.end.%d\n", c);
+        printf(".L.call.%d:\n", c);
+        printf("  sub $8, %%rsp\n");
+        printf("  mov $0, %%rax\n");
+        printf("  call *%%r10\n");
+        printf("  add $8, %%rsp\n");
+        printf(".L.end.%d:\n", c);
+    } else {
+        printf("  mov %%rsp, %%rax\n");
+        printf("  and $15, %%rax\n");
+        printf("  jnz .L.call.%d\n", c);
+        printf("  mov $0, %%rax\n");
+        printf("  call %s\n", node->funcname);
+        printf("  jmp .L.end.%d\n", c);
+        printf(".L.call.%d:\n", c);
+        printf("  sub $8, %%rsp\n");
+        printf("  mov $0, %%rax\n");
+        printf("  call %s\n", node->funcname);
+        printf("  add $8, %%rsp\n");
+        printf(".L.end.%d:\n", c);
+    }
+}
+
+static void gen_expr(Node *node) {
+    if (node->kind == ND_NUM) {
+        if (node->ty && is_flonum(node->ty)) {
+            union { double d; uint64_t u; } u = { node->fval };
+            printf("  mov $%" PRIu64 ", %%rax\n", u.u);
+            printf("  movq %%rax, %%xmm0\n");
+            return;
+        }
+        printf("  mov $%" PRId64 ", %%rax\n", node->val);
+        return;
+    }
+
+    if (node->kind == ND_VAR) {
+        gen_addr(node);
+        if (node->ty->kind != TY_ARRAY && node->ty->kind != TY_STRUCT &&
+            node->ty->kind != TY_FUNC)
+            load(node->ty);
+        return;
+    }
+
+    if (node->kind == ND_ADDR) {
+        gen_addr(node->lhs);
+        return;
+    }
+
+    if (node->kind == ND_DEREF) {
+        gen_expr(node->lhs);
+        if (node->ty->kind != TY_ARRAY && node->ty->kind != TY_STRUCT &&
+            node->ty->kind != TY_FUNC)
+            load(node->ty);
+        return;
+    }
+
+    if (node->kind == ND_MEMBER) {
+        gen_addr(node);
+        if (node->ty->kind != TY_ARRAY && node->ty->kind != TY_STRUCT)
+            load(node->ty);
+        return;
+    }
+
+    if (node->kind == ND_FUNCALL) {
+        gen_funcall(node);
+        return;
+    }
+
+    if (node->kind == ND_ASSIGN) {
+        gen_addr(node->lhs);
+        push();
+        gen_expr(node->rhs);
+        store(node->ty);
+        normalize(node->ty);
+        return;
+    }
+
+    if (node->kind == ND_ADD_EQ || node->kind == ND_SUB_EQ ||
+        node->kind == ND_MUL_EQ || node->kind == ND_DIV_EQ ||
+        node->kind == ND_MOD_EQ || node->kind == ND_AND_EQ ||
+        node->kind == ND_OR_EQ  || node->kind == ND_XOR_EQ ||
+        node->kind == ND_SHL_EQ || node->kind == ND_SHR_EQ) {
+        gen_compound_assign(node);
+        return;
+    }
+
+    if (node->kind == ND_PRE_INC || node->kind == ND_PRE_DEC ||
+        node->kind == ND_POST_INC || node->kind == ND_POST_DEC) {
+        bool increment = node->kind == ND_PRE_INC || node->kind == ND_POST_INC;
+        bool return_old = node->kind == ND_POST_INC || node->kind == ND_POST_DEC;
+        gen_inc_dec(node, increment, return_old);
+        return;
+    }
+
+    if (node->kind == ND_NEG) {
+        gen_expr(node->lhs);
+        printf("  neg %%rax\n");
+        return;
+    }
+
+    if (node->kind == ND_BITNOT) {
+        gen_expr(node->lhs);
+        printf("  not %%rax\n");
+        return;
+    }
+
+    if (node->kind == ND_CAST) {
+        gen_expr(node->lhs);
+        if (node->ty->kind == TY_BOOL) {
+            printf("  cmp $0, %%rax\n");
+            printf("  setne %%al\n");
+            printf("  movzb %%al, %%rax\n");
+        } else if (node->ty->kind == TY_CHAR)
+            printf("  movsbq %%al, %%rax\n");
+        else if (node->ty->kind == TY_SHORT)
+            printf("  movswq %%ax, %%rax\n");
+        else if (node->ty->kind == TY_INT)
+            printf("  movslq %%eax, %%rax\n");
+        return;
+    }
+
+    if (node->kind == ND_TERNARY) {
+        int c = count();
+        gen_expr(node->cond);
+        printf("  cmp $0, %%rax\n");
+        printf("  je .L.else.%d\n", c);
+        gen_expr(node->then);
+        printf("  jmp .L.end.%d\n", c);
+        printf(".L.else.%d:\n", c);
+        gen_expr(node->els);
+        printf(".L.end.%d:\n", c);
+        return;
+    }
+
+    if (node->kind == ND_NOT) {
+        gen_expr(node->lhs);
+        printf("  cmp $0, %%rax\n");
+        printf("  sete %%al\n");
+        printf("  movzb %%al, %%rax\n");
+        return;
+    }
+
+    if (node->kind == ND_LOGAND) {
+        int c = count();
+        gen_expr(node->lhs);
+        printf("  cmp $0, %%rax\n");
+        printf("  je  .L.false.%d\n", c);
+        gen_expr(node->rhs);
+        printf("  cmp $0, %%rax\n");
+        printf("  je  .L.false.%d\n", c);
+        printf("  mov $1, %%rax\n");
+        printf("  jmp .L.end.%d\n", c);
+        printf(".L.false.%d:\n", c);
+        printf("  mov $0, %%rax\n");
+        printf(".L.end.%d:\n", c);
+        return;
+    }
+
+    if (node->kind == ND_LOGOR) {
+        int c = count();
+        gen_expr(node->lhs);
+        printf("  cmp $0, %%rax\n");
+        printf("  jne .L.true.%d\n", c);
+        gen_expr(node->rhs);
+        printf("  cmp $0, %%rax\n");
+        printf("  jne .L.true.%d\n", c);
+        printf("  mov $0, %%rax\n");
+        printf("  jmp .L.end.%d\n", c);
+        printf(".L.true.%d:\n", c);
+        printf("  mov $1, %%rax\n");
+        printf(".L.end.%d:\n", c);
+        return;
+    }
+
+    if (node->kind == ND_COMMA) {
+        gen_expr(node->lhs);
+        gen_expr(node->rhs);
+        return;
+    }
+
+    gen_expr(node->rhs);
+    push();
+    gen_expr(node->lhs);
+    pop("%rdi");
+
+    switch (node->kind) {
+    case ND_ADD: printf("  add %%rdi, %%rax\n"); return;
+    case ND_SUB: printf("  sub %%rdi, %%rax\n"); return;
+    case ND_MUL: printf("  imul %%rdi, %%rax\n"); return;
+    case ND_DIV:
+        if (node->lhs->ty && node->lhs->ty->is_unsigned) {
+            printf("  mov $0, %%rdx\n");
+            printf("  div %%rdi\n");
+        } else {
+            printf("  cqo\n");
+            printf("  idiv %%rdi\n");
+        }
+        return;
+    case ND_MOD:
+        if (node->lhs->ty && node->lhs->ty->is_unsigned) {
+            printf("  mov $0, %%rdx\n");
+            printf("  div %%rdi\n");
+            printf("  mov %%rdx, %%rax\n");
+        } else {
+            printf("  cqo\n");
+            printf("  idiv %%rdi\n");
+            printf("  mov %%rdx, %%rax\n");
+        }
+        return;
+    case ND_BITAND: printf("  and %%rdi, %%rax\n"); return;
+    case ND_BITOR:  printf("  or %%rdi, %%rax\n"); return;
+    case ND_BITXOR: printf("  xor %%rdi, %%rax\n"); return;
+    case ND_SHL:
+        printf("  mov %%rdi, %%rcx\n");
+        printf("  shl %%cl, %%rax\n");
+        return;
+    case ND_SHR:
+        printf("  mov %%rdi, %%rcx\n");
+        if (node->lhs->ty && node->lhs->ty->is_unsigned)
+            printf("  shr %%cl, %%rax\n");
+        else
+            printf("  sar %%cl, %%rax\n");
+        return;
+    case ND_EQ: case ND_NE: case ND_LT: case ND_LE:
+        if (node->lhs->ty && is_flonum(node->lhs->ty)) {
+            printf("  movq %%rax, %%xmm0\n");
+            printf("  movq %%rdi, %%xmm1\n");
+            printf("  ucomisd %%xmm1, %%xmm0\n");
+            if (node->kind == ND_EQ) printf("  sete %%al\n");
+            else if (node->kind == ND_NE) printf("  setne %%al\n");
+            else if (node->kind == ND_LT) printf("  setb %%al\n");
+            else if (node->kind == ND_LE) printf("  setbe %%al\n");
+            printf("  movzb %%al, %%rax\n");
+            return;
+        }
+        printf("  cmp %%rdi, %%rax\n");
+        if (node->kind == ND_EQ) printf("  sete %%al\n");
+        else if (node->kind == ND_NE) printf("  setne %%al\n");
+        else if (node->lhs->ty && node->lhs->ty->is_unsigned) {
+            if (node->kind == ND_LT) printf("  setb %%al\n");
+            else if (node->kind == ND_LE) printf("  setbe %%al\n");
+        } else {
+            if (node->kind == ND_LT) printf("  setl %%al\n");
+            else if (node->kind == ND_LE) printf("  setle %%al\n");
+        }
+        printf("  movzb %%al, %%rax\n");
+        return;
+    default:
+        error("invalid expression");
+    }
+}
+
+static int count(void) {
+    static int i = 1;
+    return i++;
+}
+
+static void gen_stmt(Node *node) {
+    if (node->kind == ND_RETURN) {
+        if (node->lhs) gen_expr(node->lhs);
+        printf("  jmp .L.return.%s\n", current_fn);
+        return;
+    }
+
+    if (node->kind == ND_BREAK) {
+        if (!brk_label) error("break outside loop");
+        printf("  jmp %s\n", brk_label);
+        return;
+    }
+
+    if (node->kind == ND_CONTINUE) {
+        if (!cnt_label) error("continue outside loop");
+        printf("  jmp %s\n", cnt_label);
+        return;
+    }
+
+    if (node->kind == ND_GOTO) {
+        printf("  jmp %s\n", node->unique_label);
+        return;
+    }
+
+    if (node->kind == ND_LABEL) {
+        printf("%s:\n", node->unique_label);
+        gen_stmt(node->lhs);
+        return;
+    }
+
+    if (node->kind == ND_EXPR_STMT) {
+        if (node->lhs) gen_expr(node->lhs);
+        return;
+    }
+
+    if (node->kind == ND_BLOCK) {
+        for (Node *n = node->body; n; n = n->next)
+            gen_stmt(n);
+        return;
+    }
+
+    if (node->kind == ND_IF) {
+        int c = count();
+        gen_expr(node->cond);
+        printf("  cmp $0, %%rax\n");
+        printf("  je  .L.else.%d\n", c);
+        gen_stmt(node->then);
+        printf("  jmp .L.end.%d\n", c);
+        printf(".L.else.%d:\n", c);
+        if (node->els) gen_stmt(node->els);
+        printf(".L.end.%d:\n", c);
+        return;
+    }
+
+    if (node->kind == ND_WHILE) {
+        int c = count();
+        char brk_buf[32], cnt_buf[32];
+        sprintf(brk_buf, ".L.end.%d", c);
+        sprintf(cnt_buf, ".L.begin.%d", c);
+        char *old_brk = brk_label, *old_cnt = cnt_label;
+        brk_label = brk_buf; cnt_label = cnt_buf;
+
+        printf(".L.begin.%d:\n", c);
+        gen_expr(node->cond);
+        printf("  cmp $0, %%rax\n");
+        printf("  je  .L.end.%d\n", c);
+        gen_stmt(node->then);
+        printf("  jmp .L.begin.%d\n", c);
+        printf(".L.end.%d:\n", c);
+
+        brk_label = old_brk; cnt_label = old_cnt;
+        return;
+    }
+
+    if (node->kind == ND_DO) {
+        int c = count();
+        char brk_buf[32], cnt_buf[32];
+        sprintf(brk_buf, ".L.end.%d", c);
+        sprintf(cnt_buf, ".L.continue.%d", c);
+        char *old_brk = brk_label, *old_cnt = cnt_label;
+        brk_label = brk_buf; cnt_label = cnt_buf;
+
+        printf(".L.begin.%d:\n", c);
+        gen_stmt(node->then);
+        printf(".L.continue.%d:\n", c);
+        gen_expr(node->cond);
+        printf("  cmp $0, %%rax\n");
+        printf("  jne .L.begin.%d\n", c);
+        printf(".L.end.%d:\n", c);
+
+        brk_label = old_brk; cnt_label = old_cnt;
+        return;
+    }
+
+    if (node->kind == ND_FOR) {
+        int c = count();
+        char brk_buf[32], cnt_buf[32];
+        sprintf(brk_buf, ".L.end.%d", c);
+        sprintf(cnt_buf, ".L.continue.%d", c);
+        char *old_brk = brk_label, *old_cnt = cnt_label;
+        brk_label = brk_buf; cnt_label = cnt_buf;
+
+        if (node->init) gen_stmt(node->init);
+        printf(".L.begin.%d:\n", c);
+        if (node->cond) {
+            gen_expr(node->cond);
+            printf("  cmp $0, %%rax\n");
+            printf("  je  .L.end.%d\n", c);
+        }
+        gen_stmt(node->then);
+        printf(".L.continue.%d:\n", c);
+        if (node->inc) gen_expr(node->inc);
+        printf("  jmp .L.begin.%d\n", c);
+        printf(".L.end.%d:\n", c);
+
+        brk_label = old_brk; cnt_label = old_cnt;
+        return;
+    }
+
+    if (node->kind == ND_SWITCH) {
+        int c = count();
+        gen_expr(node->cond);
+
+        bool has_default = false;
+        int case_idx = 0;
+        for (Node *n = node->then->body; n; n = n->next) {
+            if (n->kind == ND_CASE) {
+                printf("  cmp $%" PRId64 ", %%rax\n", n->val);
+                printf("  je .L.case.%d.%d\n", c, case_idx++);
+            } else if (n->kind == ND_DEFAULT) {
+                has_default = true;
+            }
+        }
+        if (has_default)
+            printf("  jmp .L.default.%d\n", c);
+        else
+            printf("  jmp .L.end.%d\n", c);
+
+        char brk_buf[32];
+        sprintf(brk_buf, ".L.end.%d", c);
+        char *old_brk = brk_label;
+        brk_label = brk_buf;
+
+        case_idx = 0;
+        for (Node *n = node->then->body; n; n = n->next) {
+            if (n->kind == ND_CASE)
+                printf(".L.case.%d.%d:\n", c, case_idx++);
+            else if (n->kind == ND_DEFAULT)
+                printf(".L.default.%d:\n", c);
+            else
+                gen_stmt(n);
+        }
+
+        printf(".L.end.%d:\n", c);
+        brk_label = old_brk;
+        return;
+    }
+
+    error("invalid statement");
+}
+
+static int align_up_cg(int n, int a) { return (n + a - 1) / a * a; }
+
+static void assign_lvar_offsets(Program *prog) {
+    for (Function *fn = prog->fns; fn; fn = fn->next) {
+        int offset = 0;
+        if (fn->is_variadic) {
+            offset += 48;
+            fn->va_offset = -offset;
+
+            int p_idx = 0;
+            for (Obj *p = fn->params; p; p = p->param_next) {
+                p->offset = fn->va_offset + p_idx * 8;
+                p_idx++;
+            }
+        }
+        for (Obj *var = fn->locals; var; var = var->next) {
+            if (fn->is_variadic) {
+                bool is_param = false;
+                for (Obj *p = fn->params; p; p = p->param_next) {
+                    if (p == var) { is_param = true; break; }
+                }
+                if (is_param) continue;
+            }
+            int align = var->ty->align > 0 ? var->ty->align : 1;
+            offset += var->ty->size;
+            offset = align_up_cg(offset, align);
+            var->offset = -offset;
+        }
+        fn->stack_size = align_up_cg(offset, 16);
+    }
+}
+
+static void emit_data(Program *prog) {
+    for (Obj *var = prog->globals; var; var = var->next) {
+        if (var->is_function) continue; // function symbols don't need storage
+        if (var->is_extern) continue;   // extern declarations don't allocate
+
+        if (var->init_data) {
+            printf("  .section .rodata\n");
+            printf("%s:\n", var->name);
+            for (int i = 0; i < var->ty->array_len; i++)
+                printf("  .byte %d\n", var->init_data[i]);
+        } else if (var->init_vals) {
+            printf("  .data\n");
+            if (!var->is_static)
+                printf("  .globl %s\n", var->name);
+            printf("%s:\n", var->name);
+            int elem_size = var->ty->base ? var->ty->base->size : 4;
+            for (int i = 0; i < var->init_vals_count; i++) {
+                if (elem_size == 1)
+                    printf("  .byte %" PRId64 "\n", var->init_vals[i]);
+                else if (elem_size == 2)
+                    printf("  .short %" PRId64 "\n", var->init_vals[i]);
+                else if (elem_size == 4)
+                    printf("  .long %" PRId64 "\n", var->init_vals[i]);
+                else
+                    printf("  .quad %" PRId64 "\n", var->init_vals[i]);
+            }
+            int emitted = var->init_vals_count * elem_size;
+            if (emitted < var->ty->size)
+                printf("  .zero %d\n", var->ty->size - emitted);
+        } else if (var->has_init_val) {
+            printf("  .data\n");
+            if (!var->is_static)
+                printf("  .globl %s\n", var->name);
+            printf("%s:\n", var->name);
+            if (var->ty->size == 1)
+                printf("  .byte %" PRId64 "\n", var->init_val);
+            else if (var->ty->size == 2)
+                printf("  .short %" PRId64 "\n", var->init_val);
+            else if (var->ty->size == 4)
+                printf("  .long %" PRId64 "\n", var->init_val);
+            else
+                printf("  .quad %" PRId64 "\n", var->init_val);
+        } else {
+            printf("  .data\n");
+            if (!var->is_static)
+                printf("  .globl %s\n", var->name);
+            printf("%s:\n", var->name);
+            printf("  .zero %d\n", var->ty->size);
+        }
+    }
+}
+
+void codegen(Program *prog) {
+    assign_lvar_offsets(prog);
+    emit_data(prog);
+
+    printf("  .text\n");
+    for (Function *fn = prog->fns; fn; fn = fn->next) {
+        if (!fn->is_static)
+            printf("  .globl %s\n", fn->name);
+        printf("%s:\n", fn->name);
+        current_fn = fn->name;
+
+        // Prologue
+        printf("  push %%rbp\n");
+        printf("  mov %%rsp, %%rbp\n");
+        printf("  sub $%d, %%rsp\n", fn->stack_size);
+
+        if (fn->is_variadic) {
+            printf("  mov %%rdi, %d(%%rbp)\n", fn->va_offset + 0);
+            printf("  mov %%rsi, %d(%%rbp)\n", fn->va_offset + 8);
+            printf("  mov %%rdx, %d(%%rbp)\n", fn->va_offset + 16);
+            printf("  mov %%rcx, %d(%%rbp)\n", fn->va_offset + 24);
+            printf("  mov %%r8,  %d(%%rbp)\n", fn->va_offset + 32);
+            printf("  mov %%r9,  %d(%%rbp)\n", fn->va_offset + 40);
+        } else {
+            // Save passed-by-register arguments to the stack
+            int i = 0;
+            for (Obj *var = fn->params; var; var = var->param_next) {
+                if (i >= 6)
+                    error("too many parameters");
+                if (var->ty->kind == TY_BOOL || var->ty->kind == TY_CHAR)
+                    printf("  mov %s, %d(%%rbp)\n", argreg8[i++], var->offset);
+                else if (var->ty->kind == TY_SHORT)
+                    printf("  mov %s, %d(%%rbp)\n", argreg16[i++], var->offset);
+                else if (var->ty->kind == TY_INT)
+                    printf("  mov %s, %d(%%rbp)\n", argreg32[i++], var->offset);
+                else
+                    printf("  mov %s, %d(%%rbp)\n", argreg64[i++], var->offset);
+            }
+        }
+
+        for (Node *n = fn->body; n; n = n->next) {
+            add_type(n);
+            gen_stmt(n);
+            assert(depth == 0);
+        }
+
+        // Epilogue
+        printf(".L.return.%s:\n", fn->name);
+        printf("  mov %%rbp, %%rsp\n");
+        printf("  pop %%rbp\n");
+        printf("  ret\n");
+    }
+}

@@ -1,0 +1,272 @@
+#ifndef MINICC_H
+#define MINICC_H
+
+#define _POSIX_C_SOURCE 200809L
+#include <assert.h>
+#include <ctype.h>
+#include <inttypes.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+char *strndup(const char *s, size_t n);
+
+//
+// preprocess.c
+//
+char *preprocess(char *input);
+
+//
+// tokenize.c
+//
+
+typedef struct Type Type;
+typedef struct Node Node;
+typedef struct Obj Obj;
+typedef struct Member Member;
+
+typedef enum {
+    TK_IDENT,   // Identifiers
+    TK_PUNCT,   // Punctuators
+    TK_KEYWORD, // Keywords
+    TK_STR,     // String literals
+    TK_NUM,     // Numeric literals (int or float)
+    TK_EOF,     // End-of-file markers
+} TokenKind;
+
+typedef struct Token Token;
+struct Token {
+    TokenKind kind; // Token kind
+    Token *next;    // Next token
+    int64_t val;    // If kind is TK_NUM (integer), its value
+    double fval;    // If kind is TK_NUM (floating point), its value
+    bool is_float;  // True if token is a floating point constant
+    char *loc;      // Token location
+    int len;        // Token length
+    Type *ty;       // Used if TK_STR or TK_NUM
+    char *str;      // String literal contents including terminating '\0'
+    int line_no;    // Line number (1-based)
+};
+
+_Noreturn void error(char *fmt, ...);
+_Noreturn void error_at(char *loc, char *fmt, ...);
+bool equal(Token *tok, char *op);
+Token *skip(Token *tok, char *op);
+bool consume(Token **rest, Token *tok, char *str);
+Token *tokenize(char *input);
+
+//
+// parse.c
+//
+
+typedef enum {
+    TY_INT,
+    TY_LONG,
+    TY_CHAR,
+    TY_SHORT,
+    TY_PTR,
+    TY_ARRAY,
+    TY_VOID,
+    TY_STRUCT,
+    TY_BOOL,
+    TY_FUNC,
+    TY_FLOAT,
+    TY_DOUBLE,
+} TypeKind;
+
+struct Type {
+    TypeKind kind;
+    int size;         // sizeof() value
+    int align;        // alignment requirement
+    bool is_unsigned; // true for unsigned integer types
+    Type *base;       // Pointer or array
+    int array_len;    // Array
+    Member *members;  // Struct members
+    Type *return_ty;  // TY_FUNC: return type
+    bool is_variadic; // TY_FUNC: variadic function (...)
+};
+
+struct Member {
+    Member *next;
+    char *name;
+    Type *ty;
+    int offset;
+};
+
+extern Type *ty_int;
+extern Type *ty_long;
+extern Type *ty_char;
+extern Type *ty_short;
+extern Type *ty_void;
+extern Type *ty_bool;
+extern Type *ty_uint;
+extern Type *ty_ulong;
+extern Type *ty_uchar;
+extern Type *ty_ushort;
+extern Type *ty_float;
+extern Type *ty_double;
+
+bool is_integer(Type *ty);
+bool is_flonum(Type *ty);
+bool is_numeric(Type *ty);
+Type *pointer_to(Type *base);
+Type *array_of(Type *base, int size);
+Type *func_type(Type *return_ty);
+Type *get_common_type(Type *ty1, Type *ty2);
+void add_type(Node *node);
+
+typedef enum {
+    ND_ADD,       // +
+    ND_SUB,       // -
+    ND_MUL,       // *
+    ND_DIV,       // /
+    ND_NEG,       // unary -
+    ND_EQ,        // ==
+    ND_NE,        // !=
+    ND_LT,        // <
+    ND_LE,        // <=
+    ND_LOGAND,    // &&
+    ND_LOGOR,     // ||
+    ND_NOT,       // !
+    ND_ASSIGN,    // =
+    ND_ADD_EQ,    // +=
+    ND_SUB_EQ,    // -=
+    ND_MUL_EQ,    // *=
+    ND_DIV_EQ,    // /=
+    ND_PRE_INC,   // prefix ++
+    ND_PRE_DEC,   // prefix --
+    ND_POST_INC,  // postfix ++
+    ND_POST_DEC,  // postfix --
+    ND_RETURN,    // "return"
+    ND_IF,        // "if"
+    ND_WHILE,     // "while"
+    ND_FOR,       // "for"
+    ND_BLOCK,     // { ... }
+    ND_FUNCALL,   // Function call
+    ND_ADDR,      // & (address-of)
+    ND_DEREF,     // * (dereference)
+    ND_EXPR_STMT, // Expression statement
+    ND_VAR,       // Variable
+    ND_NUM,       // Integer or Float constant
+    ND_MOD,       // %
+    ND_BITNOT,    // ~
+    ND_BITAND,    // &
+    ND_BITOR,     // |
+    ND_BITXOR,    // ^
+    ND_SHL,       // <<
+    ND_SHR,       // >>
+    ND_MOD_EQ,    // %=
+    ND_AND_EQ,    // &=
+    ND_OR_EQ,     // |=
+    ND_XOR_EQ,    // ^=
+    ND_SHL_EQ,    // <<=
+    ND_SHR_EQ,    // >>=
+    ND_TERNARY,   // ?:
+    ND_CAST,      // (type)expr
+    ND_BREAK,     // "break"
+    ND_CONTINUE,  // "continue"
+    ND_DO,        // "do"
+    ND_SWITCH,    // "switch"
+    ND_CASE,      // "case"
+    ND_DEFAULT,   // "default"
+    ND_MEMBER,    // struct member (. and ->)
+    ND_COMMA,     // , (comma operator)
+    ND_GOTO,      // "goto"
+    ND_LABEL,     // labeled statement
+} NodeKind;
+
+struct Node {
+    NodeKind kind; // Node kind
+    Node *next;    // Next node
+
+    Node *lhs;     // Left-hand side
+    Node *rhs;     // Right-hand side
+
+    // "if", "while" or "for" statement
+    Node *cond;
+    Node *then;
+    Node *els;
+    Node *init;
+    Node *inc;
+
+    Node *body;    // Block or function body
+
+    char *funcname; // Function call name (NULL for indirect calls)
+    Node *args;     // Function arguments
+    
+    char *name;    // Variable name (also used for some generic names)
+    Obj *var;      // Variable reference
+    Type *ty;      // Type of this node
+    Member *member; // Used if kind == ND_MEMBER
+
+    int64_t val;   // Used if kind == ND_NUM (integer)
+    double fval;   // Used if kind == ND_NUM (float)
+
+    // goto / label
+    char *label_name;    // goto target or label name (source)
+    char *unique_label;  // unique assembly label generated for codegen
+    Node *goto_next;     // linked list of gotos in a function
+    Node *label_next;    // linked list of labels in a function
+};
+
+struct Obj {
+    Obj *next;
+    Obj *param_next;
+    char *name;    // Variable name
+    Type *ty;      // Variable type
+    bool is_local; // local or global/constant
+
+    // Local variable
+    int offset;    // Offset from RBP
+
+    // Global variable or string literal
+    char *init_data;
+    int64_t init_val;    // for initialized global scalars
+    double finit_val;    // for initialized double/float global scalars
+    bool has_init_val;
+
+    // Global array/struct initializer (list of int64/double values, one per element)
+    int64_t *init_vals;
+    double *finit_vals;
+    int init_vals_count;
+
+    // Flags
+    bool is_function;  // true = function symbol (not a variable)
+    bool is_static;    // static storage class
+    bool is_extern;    // extern storage class
+};
+
+typedef struct Function Function;
+struct Function {
+    Function *next;
+    char *name;
+    Obj *params;   // Parameters
+    Node *body;
+    Obj *locals;   // Local variables
+    int stack_size;
+    bool is_static;
+    bool is_variadic;
+    int va_offset;
+    Node *gotos;   // linked list of goto nodes
+    Node *labels;  // linked list of label nodes
+};
+
+// Program
+typedef struct Program Program;
+struct Program {
+    Obj *globals;
+    Function *fns;
+};
+
+Program *parse(Token *tok);
+
+//
+// codegen.c
+//
+
+void codegen(Program *prog);
+
+#endif

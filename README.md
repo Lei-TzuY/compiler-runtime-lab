@@ -1,0 +1,29 @@
+# Mini C Compiler
+
+An educational C compiler implemented in C. The pipeline includes tokenization, parsing, type analysis, and x86-64 code generation; the shell test suite documents and exercises the supported language subset.
+
+## Supported Language Features
+
+- **Types**: `char` (1B), `short` (2B), `int` (4B), `long` (8B), `void`, pointers, arrays, `struct`, `union`, `enum`, `typedef`, `unsigned`
+- **Operators**: arithmetic, bitwise, logical, comparison, ternary `?:`, comma `,`, `sizeof`, prefix/postfix `++/--`, all compound assignments (`+= -= *= /= %= &= |= ^= <<= >>=`), type cast
+- **Control flow**: `if/else`, `while`, `for` (including init declarations), `do-while`, `switch/case/default`, `break`, `continue`, `return`, `goto`/labels
+- **Declarations**: local/global variables with initializers, `{ }` brace-enclosed initializers for arrays and structs, array length inference from initializer, function definitions and prototypes
+- **Scope**: full block-level scoping
+- **Target**: x86-64 AT&T syntax assembly, Linux System V ABI
+
+## Build and test
+
+Run on Linux or WSL with GCC and GNU Make:
+
+```sh
+make
+make test
+```
+
+The test target builds `minicc`, compiles small C programs with it, links them with the host compiler, and checks their exit values. Use `make clean` to remove generated objects, binaries, and temporary test sources.
+
+Current local audit: 228/228 test cases passing.
+
+## Notes
+
+The compiler is designed as an educational systems-programming project rather than a packaged commercial product.
