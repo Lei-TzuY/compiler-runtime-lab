@@ -251,6 +251,20 @@ static bool is_scalar_operand(Type *ty) {
     return ty->kind == TY_ARRAY || ty->kind == TY_FUNC;
 }
 
+static bool is_object_pointer_operand(Type *ty) {
+    if (!ty)
+        return false;
+
+    // Array designators decay to pointers to their first element. Relational
+    // pointer comparison is defined only for pointers to object types, not
+    // void or function types.
+    if (ty->kind == TY_ARRAY)
+        return ty->base && ty->base->kind != TY_VOID && ty->base->kind != TY_FUNC;
+    if (ty->kind != TY_PTR || !ty->base)
+        return false;
+    return ty->base->kind != TY_VOID && ty->base->kind != TY_FUNC;
+}
+
 void add_type(Node *node) {
     if (!node) return;
 
@@ -357,11 +371,20 @@ void add_type(Node *node) {
 
     case ND_EQ:
     case ND_NE:
-    case ND_LT:
-    case ND_LE:
         if (!is_scalar_operand(node->lhs->ty) || !is_scalar_operand(node->rhs->ty))
             error("scalar operands required for comparison operator");
         node->ty = ty_int;
+        return;
+
+    case ND_LT:
+    case ND_LE:
+        if ((is_numeric(node->lhs->ty) && is_numeric(node->rhs->ty)) ||
+            (is_object_pointer_operand(node->lhs->ty) &&
+             is_object_pointer_operand(node->rhs->ty))) {
+            node->ty = ty_int;
+            return;
+        }
+        error("invalid operands for relational comparison");
         return;
 
     case ND_FUNCALL:
