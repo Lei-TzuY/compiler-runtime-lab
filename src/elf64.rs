@@ -44,14 +44,18 @@ pub enum ElfError {
 impl fmt::Display for ElfError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TruncatedHeader { actual } => {
-                write!(f, "ELF64 header is truncated: got {actual} bytes, need {ELF64_HEADER_SIZE}")
-            }
+            Self::TruncatedHeader { actual } => write!(
+                f,
+                "ELF64 header is truncated: got {actual} bytes, need {ELF64_HEADER_SIZE}"
+            ),
             Self::BadMagic => write!(f, "invalid ELF magic"),
-            Self::UnsupportedClass(class) => write!(f, "unsupported ELF class {class}; expected ELF64"),
-            Self::UnsupportedEndianness(data) => {
-                write!(f, "unsupported ELF data encoding {data}; expected little-endian")
+            Self::UnsupportedClass(class) => {
+                write!(f, "unsupported ELF class {class}; expected ELF64")
             }
+            Self::UnsupportedEndianness(data) => write!(
+                f,
+                "unsupported ELF data encoding {data}; expected little-endian"
+            ),
             Self::UnsupportedIdentVersion(version) => {
                 write!(f, "unsupported ELF identification version {version}")
             }
@@ -59,9 +63,10 @@ impl fmt::Display for ElfError {
                 write!(f, "unsupported ELF machine {machine}; expected x86-64")
             }
             Self::UnsupportedVersion(version) => write!(f, "unsupported ELF version {version}"),
-            Self::InvalidHeaderSize(size) => {
-                write!(f, "invalid ELF64 header size {size}; expected {ELF64_HEADER_SIZE}")
-            }
+            Self::InvalidHeaderSize(size) => write!(
+                f,
+                "invalid ELF64 header size {size}; expected {ELF64_HEADER_SIZE}"
+            ),
             Self::InvalidProgramHeaderEntrySize(size) => write!(
                 f,
                 "invalid ELF64 program-header entry size {size}; expected {ELF64_PROGRAM_HEADER_SIZE}"
@@ -71,7 +76,11 @@ impl fmt::Display for ElfError {
                 "invalid ELF64 section-header entry size {size}; expected {ELF64_SECTION_HEADER_SIZE}"
             ),
             Self::TableRangeOverflow(table) => write!(f, "{table} table range overflows u64"),
-            Self::TableOutOfBounds { table, end, file_len } => write!(
+            Self::TableOutOfBounds {
+                table,
+                end,
+                file_len,
+            } => write!(
                 f,
                 "{table} table ends at file offset {end}, beyond file length {file_len}"
             ),
