@@ -23,7 +23,9 @@ pub struct Elf64Header {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElfError {
-    TruncatedHeader { actual: usize },
+    TruncatedHeader {
+        actual: usize,
+    },
     BadMagic,
     UnsupportedClass(u8),
     UnsupportedEndianness(u8),
