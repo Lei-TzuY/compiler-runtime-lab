@@ -17,6 +17,7 @@ const PF_R: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadSegmentPermissions {
+    ReadOnly,
     ReadExecute,
     ReadWrite,
 }
@@ -24,6 +25,7 @@ pub enum LoadSegmentPermissions {
 impl LoadSegmentPermissions {
     fn elf_flags(self) -> u32 {
         match self {
+            Self::ReadOnly => PF_R,
             Self::ReadExecute => PF_R | PF_X,
             Self::ReadWrite => PF_R | PF_W,
         }
