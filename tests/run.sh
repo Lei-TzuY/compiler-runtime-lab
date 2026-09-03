@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+
+hello_output="$(./build/hello)"
+if [ "$hello_output" != "hello from mini-libc" ]; then
+    echo "unexpected hello output: $hello_output" >&2
+    exit 1
+fi
+
+set +e
+runtime_output="$(MINI_LIBC_SENTINEL=present ./build/runtime_probe alpha beta)"
+runtime_status=$?
+set -e
+if [ "$runtime_status" -ne 37 ]; then
+    echo "runtime probe returned $runtime_status, expected 37" >&2
+    exit 1
+fi
+if [ "$runtime_output" != "runtime-ok" ]; then
+    echo "unexpected runtime probe output: $runtime_output" >&2
+    exit 1
+fi
+
+syscall_output="$(./build/syscall_probe)"
+if [ "$syscall_output" != "syscall-ok" ]; then
+    echo "unexpected syscall probe output: $syscall_output" >&2
+    exit 1
+fi
+
+echo "runtime and syscall probes passed"

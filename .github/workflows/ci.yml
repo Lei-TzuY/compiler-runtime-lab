@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run probes
+        run: make clean test CC=${{ matrix.cc }}
+      - name: Verify host-libc independence
+        run: make inspect CC=${{ matrix.cc }}
