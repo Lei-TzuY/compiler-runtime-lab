@@ -1,5 +1,8 @@
 #include "debugger/debugger.hpp"
+#include "elf/elf.hpp"
 #include "registers/registers.hpp"
+
+#include <elf.h>
 
 #include <iomanip>
 #include <iostream>
@@ -9,27 +12,54 @@
 
 namespace {
 
-std::uintptr_t parse_address(const std::string& text) {
-  std::size_t consumed = 0;
-  const auto value = std::stoull(text, &consumed, 0);
-  if (consumed != text.size()) {
-    throw std::invalid_argument("invalid address");
+std::optional<std::uintptr_t> try_parse_address(const std::string& text) {
+  try {
+    std::size_t consumed = 0;
+    const auto value = std::stoull(text, &consumed, 0);
+    if (consumed == text.size()) return static_cast<std::uintptr_t>(value);
+  } catch (const std::exception&) {
   }
-  return static_cast<std::uintptr_t>(value);
+  return std::nullopt;
 }
 
-void print_stop(const mdbg::StopInfo& info) {
+std::uintptr_t resolve_location(const std::string& text, const mdbg::ElfFile& elf, pid_t pid) {
+  if (const auto address = try_parse_address(text)) return *address;
+  const auto symbol = elf.find_symbol(text);
+  if (!symbol) throw std::invalid_argument("unknown symbol: " + text);
+  return static_cast<std::uintptr_t>(elf.runtime_address(pid, *symbol));
+}
+
+void print_stop(const mdbg::StopInfo& info, const mdbg::ElfFile& elf, pid_t pid) {
   using mdbg::StopReason;
   switch (info.reason) {
-    case StopReason::InitialExec: std::cout << "stopped after exec\n"; break;
-    case StopReason::Breakpoint:
-      std::cout << "breakpoint at 0x" << std::hex << *info.breakpoint_address << std::dec << '\n';
+    case StopReason::InitialExec:
+      std::cout << "stopped after exec\n";
       break;
-    case StopReason::SingleStep: std::cout << "single-step trap\n"; break;
-    case StopReason::Signal: std::cout << "stopped by signal " << info.value << '\n'; break;
-    case StopReason::Trap: std::cout << "SIGTRAP (not a managed breakpoint)\n"; break;
-    case StopReason::Exited: std::cout << "process exited with code " << info.value << '\n'; break;
-    case StopReason::Signaled: std::cout << "process terminated by signal " << info.value << '\n'; break;
+    case StopReason::Breakpoint: {
+      std::cout << "breakpoint at 0x" << std::hex << *info.breakpoint_address << std::dec;
+      if (const auto symbol = elf.find_symbol_by_runtime_address(pid, *info.breakpoint_address)) {
+        std::cout << " (" << symbol->symbol.name;
+        if (symbol->offset != 0) std::cout << "+0x" << std::hex << symbol->offset << std::dec;
+        std::cout << ')';
+      }
+      std::cout << '\n';
+      break;
+    }
+    case StopReason::SingleStep:
+      std::cout << "single-step trap\n";
+      break;
+    case StopReason::Signal:
+      std::cout << "stopped by signal " << info.value << '\n';
+      break;
+    case StopReason::Trap:
+      std::cout << "SIGTRAP (not a managed breakpoint)\n";
+      break;
+    case StopReason::Exited:
+      std::cout << "process exited with code " << info.value << '\n';
+      break;
+    case StopReason::Signaled:
+      std::cout << "process terminated by signal " << info.value << '\n';
+      break;
   }
 }
 
@@ -45,8 +75,9 @@ int main(int argc, char** argv) {
   for (int i = 2; i < argc; ++i) args.emplace_back(argv[i]);
 
   try {
+    const mdbg::ElfFile elf(argv[1]);
     auto debugger = mdbg::Debugger::launch(argv[1], args);
-    print_stop(debugger.stop_info());
+    print_stop(debugger.stop_info(), elf, debugger.pid());
 
     std::string line;
     while (debugger.state() == mdbg::ProcessState::Stopped &&
@@ -57,9 +88,9 @@ int main(int argc, char** argv) {
       if (command.empty()) continue;
       if (command == "quit" || command == "q") break;
       if (command == "continue" || command == "c") {
-        print_stop(debugger.continue_execution());
+        print_stop(debugger.continue_execution(), elf, debugger.pid());
       } else if (command == "stepi" || command == "si") {
-        print_stop(debugger.single_step());
+        print_stop(debugger.single_step(), elf, debugger.pid());
       } else if (command == "regs") {
         for (const auto& [name, value] : mdbg::general_purpose_registers(debugger.registers())) {
           std::cout << std::setw(6) << name << " 0x" << std::hex << value << std::dec << '\n';
@@ -74,7 +105,7 @@ int main(int argc, char** argv) {
         std::string address_text;
         std::size_t length = 8;
         input >> address_text >> length;
-        const auto address = parse_address(address_text);
+        const auto address = resolve_location(address_text, elf, debugger.pid());
         const auto bytes = debugger.read_memory(address, length);
         std::cout << "0x" << std::hex << address << ":";
         for (const auto byte : bytes) {
@@ -83,11 +114,13 @@ int main(int argc, char** argv) {
         }
         std::cout << std::setfill(' ') << std::dec << '\n';
       } else if (command == "break" || command == "b") {
-        std::string address_text;
-        input >> address_text;
-        const auto address = parse_address(address_text);
+        std::string location;
+        input >> location;
+        const auto address = resolve_location(location, elf, debugger.pid());
         const auto id = debugger.add_breakpoint(address);
-        std::cout << "Breakpoint " << id << " at 0x" << std::hex << address << std::dec << '\n';
+        std::cout << "Breakpoint " << id << " at 0x" << std::hex << address << std::dec;
+        if (!try_parse_address(location)) std::cout << " (" << location << ')';
+        std::cout << '\n';
       } else if (command == "delete") {
         std::size_t id = 0;
         input >> id;
@@ -103,9 +136,18 @@ int main(int argc, char** argv) {
           std::cout << bp.id << " 0x" << std::hex << bp.address << std::dec
                     << (bp.installed ? " enabled" : " temporarily-restored") << '\n';
         }
+      } else if (command == "symbols") {
+        std::string filter;
+        input >> filter;
+        for (const auto& symbol : elf.symbols()) {
+          if (symbol.type != STT_FUNC) continue;
+          if (!filter.empty() && symbol.name.find(filter) == std::string::npos) continue;
+          std::cout << "0x" << std::hex << elf.runtime_address(debugger.pid(), symbol)
+                    << std::dec << ' ' << symbol.name << '\n';
+        }
       } else {
-        std::cout << "commands: continue, stepi, regs, reg <name>, x <addr> [len], "
-                     "break <addr>, delete <id>, info breakpoints, quit\n";
+        std::cout << "commands: continue, stepi, regs, reg <name>, x <addr|symbol> [len], "
+                     "break <addr|symbol>, delete <id>, info breakpoints, symbols [filter], quit\n";
       }
     }
   } catch (const std::exception& error) {

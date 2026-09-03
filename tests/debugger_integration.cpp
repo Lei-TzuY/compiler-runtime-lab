@@ -1,4 +1,5 @@
 #include "debugger/debugger.hpp"
+#include "elf/elf.hpp"
 #include "ptrace/ptrace.hpp"
 
 #include <csignal>
@@ -69,6 +70,22 @@ void test_normal_exit(const std::string& fixture) {
   const auto info = session.debugger.continue_execution();
   require(info.reason == mdbg::StopReason::Exited && info.value == 0,
           "normal exit was not reported correctly");
+}
+
+void test_elf_runtime_symbol_resolution(const std::string& fixture) {
+  Session session(fixture, "sequence");
+  const mdbg::ElfFile elf(fixture);
+  const auto one = elf.find_symbol("breakpoint_one");
+  const auto two = elf.find_symbol("breakpoint_two");
+  require(one && two, "fixture ELF symbols should be present");
+  require(elf.runtime_address(session.debugger.pid(), *one) == session.addresses.one,
+          "symbol-to-runtime resolution mismatch");
+  require(elf.runtime_address(session.debugger.pid(), *two) == session.addresses.two,
+          "second symbol-to-runtime resolution mismatch");
+  const auto reverse = elf.find_symbol_by_runtime_address(session.debugger.pid(),
+                                                           session.addresses.one);
+  require(reverse && reverse->symbol.name == "breakpoint_one" && reverse->offset == 0,
+          "runtime address-to-symbol resolution mismatch");
 }
 
 void test_registers_and_memory(const std::string& fixture) {
@@ -216,6 +233,7 @@ int main(int argc, char** argv) {
   try {
     const std::string fixture = argv[1];
     test_normal_exit(fixture);
+    test_elf_runtime_symbol_resolution(fixture);
     test_registers_and_memory(fixture);
     test_repeated_breakpoint_and_clean_exit(fixture);
     test_single_step_after_breakpoint(fixture);

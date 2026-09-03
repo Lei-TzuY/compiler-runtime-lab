@@ -16,6 +16,7 @@ add_library(mdbg_core
   src/ptrace/ptrace.cpp
   src/process/process.cpp
   src/registers/registers.cpp
+  src/elf/elf.cpp
   src/debugger/debugger.cpp
 )
 target_include_directories(mdbg_core PUBLIC src)
@@ -35,6 +36,12 @@ if(BUILD_TESTING)
   target_compile_options(debugger_fixture_nopie PRIVATE -O0 -g -fno-omit-frame-pointer -fno-pie)
   target_link_options(debugger_fixture_nopie PRIVATE -no-pie)
 
+  add_executable(debugger_fixture_stripped tests/fixtures/debugger_fixture.c)
+  target_compile_options(debugger_fixture_stripped PRIVATE -O0 -fPIE)
+  target_link_options(debugger_fixture_stripped PRIVATE -pie)
+  add_custom_command(TARGET debugger_fixture_stripped POST_BUILD
+    COMMAND ${CMAKE_STRIP} --strip-all $<TARGET_FILE:debugger_fixture_stripped>)
+
   add_executable(debugger_integration tests/debugger_integration.cpp)
   target_link_libraries(debugger_integration PRIVATE mdbg_core)
   target_compile_options(debugger_integration PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -43,4 +50,12 @@ if(BUILD_TESTING)
     COMMAND debugger_integration $<TARGET_FILE:debugger_fixture_pie>)
   add_test(NAME debugger_integration_nopie
     COMMAND debugger_integration $<TARGET_FILE:debugger_fixture_nopie>)
+
+  add_executable(elf_tests tests/elf_tests.cpp)
+  target_link_libraries(elf_tests PRIVATE mdbg_core)
+  target_compile_options(elf_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME elf_tests COMMAND elf_tests
+    $<TARGET_FILE:debugger_fixture_pie>
+    $<TARGET_FILE:debugger_fixture_nopie>
+    $<TARGET_FILE:debugger_fixture_stripped>)
 endif()
