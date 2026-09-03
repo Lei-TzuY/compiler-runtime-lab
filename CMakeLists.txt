@@ -1,0 +1,46 @@
+cmake_minimum_required(VERSION 3.20)
+project(mini_debugger LANGUAGES C CXX)
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR "mini-debugger currently supports Linux only")
+endif()
+if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+  message(FATAL_ERROR "mini-debugger currently supports x86-64 only")
+endif()
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+add_library(mdbg_core
+  src/ptrace/ptrace.cpp
+  src/process/process.cpp
+  src/registers/registers.cpp
+  src/debugger/debugger.cpp
+)
+target_include_directories(mdbg_core PUBLIC src)
+target_compile_options(mdbg_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_executable(mdbg src/cli/main.cpp)
+target_link_libraries(mdbg PRIVATE mdbg_core)
+target_compile_options(mdbg PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(debugger_fixture_pie tests/fixtures/debugger_fixture.c)
+  target_compile_options(debugger_fixture_pie PRIVATE -O0 -g -fno-omit-frame-pointer -fPIE)
+  target_link_options(debugger_fixture_pie PRIVATE -pie)
+
+  add_executable(debugger_fixture_nopie tests/fixtures/debugger_fixture.c)
+  target_compile_options(debugger_fixture_nopie PRIVATE -O0 -g -fno-omit-frame-pointer -fno-pie)
+  target_link_options(debugger_fixture_nopie PRIVATE -no-pie)
+
+  add_executable(debugger_integration tests/debugger_integration.cpp)
+  target_link_libraries(debugger_integration PRIVATE mdbg_core)
+  target_compile_options(debugger_integration PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+  add_test(NAME debugger_integration_pie
+    COMMAND debugger_integration $<TARGET_FILE:debugger_fixture_pie>)
+  add_test(NAME debugger_integration_nopie
+    COMMAND debugger_integration $<TARGET_FILE:debugger_fixture_nopie>)
+endif()
