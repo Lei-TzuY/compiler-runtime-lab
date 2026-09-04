@@ -1,0 +1,120 @@
+name: One-shot history import — mini-elf-toolchain
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/import-mini-elf-toolchain.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: compiler-runtime-lab-history-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: Lei-TzuY/mini-elf-toolchain
+      SOURCE_SHA: 3d452a8681bbfb092cd41465dba6f6eb97dfd224
+      SOURCE_REMOTE: source-mini-elf
+      TARGET_PATH: projects/mini-elf-toolchain
+    steps:
+      - name: Checkout exact umbrella trigger
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Verify exact umbrella trigger
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          test ! -e "$TARGET_PATH"
+
+      - name: Fetch frozen source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add "$SOURCE_REMOTE" "https://github.com/$SOURCE_REPO.git"
+          git fetch "$SOURCE_REMOTE" main --tags --prune
+          LIVE_SOURCE_SHA="$(git rev-parse "$SOURCE_REMOTE/main")"
+          echo "Live source: $LIVE_SOURCE_SHA"
+          test "$LIVE_SOURCE_SHA" = "$SOURCE_SHA"
+
+      - name: Recheck source open PR and exact CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          OPEN_PRS="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$SOURCE_REPO/pulls?state=open&per_page=100")"
+          test "$(jq 'length' <<<"$OPEN_PRS")" -eq 0
+
+          RUNS="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$SOURCE_REPO/actions/runs?branch=main&per_page=20")"
+          MATCHING="$(jq --arg sha "$SOURCE_SHA" '[.workflow_runs[] | select(.head_sha == $sha)]' <<<"$RUNS")"
+          test "$(jq 'length' <<<"$MATCHING")" -gt 0
+          test "$(jq '[.[] | select(.status != "completed" or .conclusion != "success")] | length' <<<"$MATCHING")" -eq 0
+
+      - name: Audit complete reachable source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git log "$SOURCE_REMOTE/main" --format='%H%x09%an%x09%ae%x09%B' > /tmp/source-history.txt
+          if grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai' /tmp/source-history.txt > /tmp/attribution-matches.txt; then
+            echo 'Attribution/history matches detected; refusing automatic import.'
+            cat /tmp/attribution-matches.txt
+            exit 1
+          fi
+          git cat-file -e "$SOURCE_SHA:README.md"
+
+      - name: Import source history without squash
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'LeiZ'
+          git config user.email '52287354+Lei-TzuY@users.noreply.github.com'
+          git subtree add --prefix="$TARGET_PATH" "$SOURCE_REMOTE" main
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+
+      - name: Verify imported tree is blob-for-blob equivalent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-tree -r "$SOURCE_SHA" | sort > /tmp/source-tree.txt
+          git ls-tree -r HEAD -- "$TARGET_PATH" \
+            | sed "s#\t$TARGET_PATH/#\t#" \
+            | sort > /tmp/imported-tree.txt
+          diff -u /tmp/source-tree.txt /tmp/imported-tree.txt
+
+      - name: Run project-native CI gates from umbrella path
+        shell: bash
+        working-directory: projects/mini-elf-toolchain
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-targets --all-features
+
+      - name: Remove one-shot workflow from final tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/import-mini-elf-toolchain.yml
+          git commit --amend --no-edit
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          test -z "$(git status --porcelain)"
+          if git log -1 --format='%B' | grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai'; then
+            echo 'Forbidden attribution trailer in umbrella import commit.'
+            exit 1
+          fi
+
+      - name: Race check and publish verified import
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --prune
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          git push origin HEAD:main
