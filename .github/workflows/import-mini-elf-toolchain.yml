@@ -98,16 +98,16 @@ jobs:
           cargo clippy --all-targets --all-features -- -D warnings
           cargo test --all-targets --all-features
 
-      - name: Remove one-shot workflow from final tree
+      - name: Remove one-shot workflow while preserving subtree ancestry
         shell: bash
         run: |
           set -euo pipefail
           git rm .github/workflows/import-mini-elf-toolchain.yml
-          git commit --amend --no-edit
+          git commit -m 'chore: remove one-shot mini-elf import workflow'
           git merge-base --is-ancestor "$SOURCE_SHA" HEAD
           test -z "$(git status --porcelain)"
-          if git log -1 --format='%B' | grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai'; then
-            echo 'Forbidden attribution trailer in umbrella import commit.'
+          if git log -2 --format='%B' | grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai'; then
+            echo 'Forbidden attribution trailer in umbrella import/cleanup commits.'
             exit 1
           fi
 
