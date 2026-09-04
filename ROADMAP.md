@@ -14,7 +14,7 @@ Before importing any project, establish an exact source commit and verify it aga
 - [ ] Nova — refresh exact `main`, open PRs, CI, attribution and repository hygiene.
 - [ ] tiny-c-compiler — resolve/accept bot co-author history policy before import.
 - [ ] sic-xe-assembler — finish or close the active implementation PR before migration.
-- [ ] mini-elf-toolchain — refresh exact green source head and freeze import point.
+- [x] mini-elf-toolchain — frozen at `3d452a8681bbfb092cd41465dba6f6eb97dfd224`; exact source/open-PR/CI/attribution gates passed immediately before import.
 - [ ] mini-language-server — refresh exact green source head and freeze import point.
 - [ ] mini-debugger — refresh exact green source head and freeze import point.
 - [ ] mini-libc — refresh exact green source head and freeze import point.
@@ -41,19 +41,19 @@ projects/tiny-tensor-compiler/
 
 Suggested import order:
 
-1. `mini-elf-toolchain`
-2. `mini-libc`
-3. `mini-debugger`
-4. `tiny-tensor-compiler`
-5. `mini-wasm-runtime`
-6. `mini-language-server`
-7. `Nova`
-8. `tiny-c-compiler` after attribution policy is resolved
-9. `sic-xe-assembler` after its active PR is resolved
+1. [x] `mini-elf-toolchain` — **IMPORTED / VERIFIED**
+2. [ ] `mini-libc`
+3. [ ] `mini-debugger`
+4. [ ] `tiny-tensor-compiler`
+5. [ ] `mini-wasm-runtime`
+6. [ ] `mini-language-server`
+7. [ ] `Nova`
+8. [ ] `tiny-c-compiler` after attribution policy is resolved
+9. [ ] `sic-xe-assembler` after its active PR is resolved
 
 The order is intentionally conservative: start with smaller, independently verifiable repositories, then migrate projects with stronger cross-project coupling or live-development blockers.
 
-For every imported project:
+For each remaining import:
 
 - [ ] preserve reachable commit history;
 - [ ] preserve project-local license and documentation;
@@ -62,6 +62,8 @@ For every imported project:
 - [ ] verify no migration-only files leaked into the project tree;
 - [ ] run project tests/build/checks from the umbrella layout;
 - [ ] record verification evidence in `docs/MIGRATION.md`.
+
+The first import established the reference process: `mini-elf-toolchain` source SHA `3d452a86...` is an ancestor of the umbrella main, its subtree matched the frozen source blob-for-blob, project-native formatter/Clippy/tests passed in the umbrella path, generated migration-only `Cargo.lock` was removed, and the one-shot import workflow removed itself before publication.
 
 ## Phase 3 — Umbrella integration
 
