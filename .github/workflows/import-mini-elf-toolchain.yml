@@ -21,7 +21,6 @@ jobs:
       SOURCE_SHA: 3d452a8681bbfb092cd41465dba6f6eb97dfd224
       SOURCE_REMOTE: source-mini-elf
       TARGET_PATH: projects/mini-elf-toolchain
-      CARGO_TARGET_DIR: ${{ runner.temp }}/mini-elf-target
     steps:
       - name: Checkout exact umbrella trigger
         uses: actions/checkout@v4
@@ -95,6 +94,7 @@ jobs:
         working-directory: projects/mini-elf-toolchain
         run: |
           set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/mini-elf-target"
           cargo fmt --all -- --check
           cargo clippy --all-targets --all-features -- -D warnings
           cargo test --all-targets --all-features
