@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "umbrella": "Lei-TzuY/compiler-runtime-lab",
+  "generated_from_preflight_date": "2026-09-05",
+  "projects": [
+    {
+      "name": "Nova",
+      "source_repository": "Lei-TzuY/Nova",
+      "target_path": "projects/Nova",
+      "observed_main_sha": "dcadc2238737b6f1e98887ab8fa658b23413d31b",
+      "status": "ready-for-import-prep",
+      "blocker": null,
+      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+    },
+    {
+      "name": "tiny-c-compiler",
+      "source_repository": "Lei-TzuY/tiny-c-compiler",
+      "target_path": "projects/tiny-c-compiler",
+      "observed_main_sha": "5607c3152d319353c42f05ed44ff53479272a74f",
+      "status": "attribution-review",
+      "blocker": "Reachable history includes Co-authored-by: github-actions[bot] trailers; choose explicit preservation/rewrite policy before import.",
+      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search. Do not rewrite genuine authorship silently."
+    },
+    {
+      "name": "sic-xe-assembler",
+      "source_repository": "Lei-TzuY/sic-xe-assembler",
+      "target_path": "projects/sic-xe-assembler",
+      "observed_main_sha": "a58f4b5c7f34675fddf437d4af596cd81b5d891f",
+      "status": "hold",
+      "blocker": "Open implementation PR #30 (cross-domain memory/register CFG fixed point).",
+      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search."
+    },
+    {
+      "name": "mini-elf-toolchain",
+      "source_repository": "Lei-TzuY/mini-elf-toolchain",
+      "target_path": "projects/mini-elf-toolchain",
+      "observed_main_sha": "3d452a8681bbfb092cd41465dba6f6eb97dfd224",
+      "status": "ready-for-import-prep",
+      "blocker": null,
+      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+    },
+    {
+      "name": "mini-language-server",
+      "source_repository": "Lei-TzuY/mini-language-server",
+      "target_path": "projects/mini-language-server",
+      "observed_main_sha": "74ecddce7061abc6cae467728d12599f3403c28c",
+      "status": "ready-for-import-prep",
+      "blocker": null,
+      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+    },
+    {
+      "name": "mini-debugger",
+      "source_repository": "Lei-TzuY/mini-debugger",
+      "target_path": "projects/mini-debugger",
+      "observed_main_sha": "f35d4f70075cbd95230dd37592c5d5a1a90a40a2",
+      "status": "ready-for-import-prep",
+      "blocker": null,
+      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+    },
+    {
+      "name": "mini-libc",
+      "source_repository": "Lei-TzuY/mini-libc",
+      "target_path": "projects/mini-libc",
+      "observed_main_sha": "a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1",
+      "status": "ready-for-import-prep",
+      "blocker": null,
+      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+    },
+    {
+      "name": "mini-wasm-runtime",
+      "source_repository": "Lei-TzuY/mini-wasm-runtime",
+      "target_path": "projects/mini-wasm-runtime",
+      "observed_main_sha": "e923b27a2652aba88d50cdbb75d0fe959d40e457",
+      "status": "ready-for-import-prep",
+      "blocker": null,
+      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; refresh every required CI/fuzz/differential gate before freeze."
+    },
+    {
+      "name": "tiny-tensor-compiler",
+      "source_repository": "Lei-TzuY/tiny-tensor-compiler",
+      "target_path": "projects/tiny-tensor-compiler",
+      "observed_main_sha": "8ebab53570adcdea8c483e301f07aab05e679426",
+      "status": "ready-for-import-prep",
+      "blocker": null,
+      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+    }
+  ]
+}
