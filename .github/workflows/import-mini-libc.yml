@@ -1,0 +1,172 @@
+name: One-shot history import — mini-libc
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/import-mini-libc.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: compiler-runtime-lab-history-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: Lei-TzuY/mini-libc
+      SOURCE_SHA: a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1
+      SOURCE_REMOTE: source-mini-libc
+      TARGET_PATH: projects/mini-libc
+      TINY_C_SHA: 5607c3152d319353c42f05ed44ff53479272a74f
+      PINNED_MINI_ELF_SHA: 3e0f2da92e21b9399dfa4139b56c2b6b52c3c1a5
+    steps:
+      - name: Checkout exact umbrella trigger
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Verify exact umbrella trigger
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          test ! -e "$TARGET_PATH"
+          test -d projects/mini-elf-toolchain
+
+      - name: Fetch frozen source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add "$SOURCE_REMOTE" "https://github.com/$SOURCE_REPO.git"
+          git fetch "$SOURCE_REMOTE" main --tags --prune
+          LIVE_SOURCE_SHA="$(git rev-parse "$SOURCE_REMOTE/main")"
+          echo "Live source: $LIVE_SOURCE_SHA"
+          test "$LIVE_SOURCE_SHA" = "$SOURCE_SHA"
+
+      - name: Recheck source open PR and exact CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          OPEN_PRS="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$SOURCE_REPO/pulls?state=open&per_page=100")"
+          test "$(jq 'length' <<<"$OPEN_PRS")" -eq 0
+
+          RUNS="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$SOURCE_REPO/actions/runs?branch=main&per_page=20")"
+          MATCHING="$(jq --arg sha "$SOURCE_SHA" '[.workflow_runs[] | select(.head_sha == $sha)]' <<<"$RUNS")"
+          test "$(jq 'length' <<<"$MATCHING")" -gt 0
+          test "$(jq '[.[] | select(.status != "completed" or .conclusion != "success")] | length' <<<"$MATCHING")" -eq 0
+
+      - name: Audit complete reachable source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git log "$SOURCE_REMOTE/main" --format='%H%x09%an%x09%ae%x09%B' > /tmp/source-history.txt
+          if grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai' /tmp/source-history.txt > /tmp/attribution-matches.txt; then
+            echo 'Attribution/history matches detected; refusing automatic import.'
+            cat /tmp/attribution-matches.txt
+            exit 1
+          fi
+          git cat-file -e "$SOURCE_SHA:README.md"
+          git cat-file -e "$SOURCE_SHA:Makefile"
+          git cat-file -e "$SOURCE_SHA:docs"
+
+      - name: Import source history without squash
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'LeiZ'
+          git config user.email '52287354+Lei-TzuY@users.noreply.github.com'
+          git subtree add --prefix="$TARGET_PATH" "$SOURCE_REMOTE" main
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+
+      - name: Verify imported tree is blob-for-blob equivalent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-tree -r "$SOURCE_SHA" | sort > /tmp/source-tree.txt
+          git ls-tree -r HEAD -- "$TARGET_PATH" \
+            | sed "s#\t$TARGET_PATH/#\t#" \
+            | sort > /tmp/imported-tree.txt
+          diff -u /tmp/source-tree.txt /tmp/imported-tree.txt
+
+      - name: Run GCC runtime and host-libc gates
+        shell: bash
+        working-directory: projects/mini-libc
+        run: |
+          set -euo pipefail
+          make clean test CC=gcc
+          make inspect CC=gcc
+
+      - name: Run Clang runtime and host-libc gates
+        shell: bash
+        working-directory: projects/mini-libc
+        run: |
+          set -euo pipefail
+          make clean test CC=clang
+          make inspect CC=clang
+
+      - name: Reproduce pinned tiny-c bootstrap
+        shell: bash
+        working-directory: projects/mini-libc
+        run: |
+          set -euo pipefail
+          TINY_C_DIR="$RUNNER_TEMP/tiny-c-compiler"
+          git clone --quiet https://github.com/Lei-TzuY/tiny-c-compiler.git "$TINY_C_DIR"
+          git -C "$TINY_C_DIR" checkout --quiet "$TINY_C_SHA"
+          make -C "$TINY_C_DIR" minicc
+          MINICC="$TINY_C_DIR/minicc" ./tests/verify-tiny-c-compiler.sh
+
+      - name: Reproduce pinned three-repo bootstrap
+        shell: bash
+        working-directory: projects/mini-libc
+        run: |
+          set -euo pipefail
+          TINY_C_DIR="$RUNNER_TEMP/tiny-c-compiler"
+          MINI_ELF_DIR="$RUNNER_TEMP/pinned-mini-elf-toolchain"
+          git clone --quiet https://github.com/Lei-TzuY/mini-elf-toolchain.git "$MINI_ELF_DIR"
+          git -C "$MINI_ELF_DIR" checkout --quiet "$PINNED_MINI_ELF_SHA"
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/pinned-mini-elf-target"
+          cargo build --manifest-path "$MINI_ELF_DIR/Cargo.toml" --bin mini-elf-toolchain
+          MINICC="$TINY_C_DIR/minicc" \
+          MINI_ELF_LINKER="$CARGO_TARGET_DIR/debug/mini-elf-toolchain" \
+          OUT=build/mini-toolchain-integration \
+            ./tests/verify-tiny-c-compiler.sh
+
+      - name: Clean project build outputs and require clean tree
+        shell: bash
+        working-directory: projects/mini-libc
+        run: |
+          set -euo pipefail
+          make clean
+          cd ../..
+          test -z "$(git status --porcelain)"
+
+      - name: Remove one-shot workflow while preserving subtree ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/import-mini-libc.yml
+          git commit -m 'chore: remove one-shot mini-libc import workflow'
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          test -z "$(git status --porcelain)"
+          if git log -2 --format='%B' | grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai'; then
+            echo 'Forbidden attribution trailer in umbrella import/cleanup commits.'
+            exit 1
+          fi
+
+      - name: Final source and umbrella race check, then publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch "$SOURCE_REMOTE" main --prune
+          test "$(git rev-parse "$SOURCE_REMOTE/main")" = "$SOURCE_SHA"
+          OPEN_PRS="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$SOURCE_REPO/pulls?state=open&per_page=100")"
+          test "$(jq 'length' <<<"$OPEN_PRS")" -eq 0
+          git fetch origin main --prune
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA"
+          git push origin HEAD:main
