@@ -1,0 +1,94 @@
+name: mini-debugger
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'projects/mini-debugger/**'
+      - 'projects/mini-elf-toolchain/**'
+      - '.github/workflows/mini-debugger.yml'
+  pull_request:
+    paths:
+      - 'projects/mini-debugger/**'
+      - 'projects/mini-elf-toolchain/**'
+      - '.github/workflows/mini-debugger.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mini-debugger-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S projects/mini-debugger -B "$RUNNER_TEMP/mini-debugger-build" -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build "$RUNNER_TEMP/mini-debugger-build" --parallel 2
+
+      - name: Test
+        run: ctest --test-dir "$RUNNER_TEMP/mini-debugger-build" --output-on-failure
+
+  mini-elf-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build debugger and imported linker
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S projects/mini-debugger -B "$RUNNER_TEMP/mini-debugger-build" -DCMAKE_BUILD_TYPE=Debug
+          cmake --build "$RUNNER_TEMP/mini-debugger-build" --parallel 2
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/mini-elf-debugger-target"
+          cargo build --manifest-path projects/mini-elf-toolchain/Cargo.toml --bin mini-elf-toolchain
+
+      - name: Link a sectionless ELF and debug it by address
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/elf-debugger-smoke"
+          DBG_BUILD="$RUNNER_TEMP/mini-debugger-build"
+          ELF_TARGET="$RUNNER_TEMP/mini-elf-debugger-target"
+          mkdir -p "$WORK"
+
+          cat > "$WORK/probe.S" <<'EOF'
+          .text
+          .globl _start
+          .type _start,@function
+          _start:
+              nop
+              mov $60, %eax
+              xor %edi, %edi
+              syscall
+          .size _start, .-_start
+          EOF
+
+          cc -c -nostdlib -fno-pie -o "$WORK/probe.o" "$WORK/probe.S"
+          "$ELF_TARGET/debug/mini-elf-toolchain" link -o "$WORK/probe" "$WORK/probe.o"
+          chmod +x "$WORK/probe"
+
+          readelf -h "$WORK/probe" > "$WORK/header.txt"
+          grep -q 'Class:.*ELF64' "$WORK/header.txt"
+          grep -q 'Type:.*EXEC' "$WORK/header.txt"
+          grep -Eq 'Start of section headers:[[:space:]]+0' "$WORK/header.txt"
+          grep -Eq 'Number of section headers:[[:space:]]+0' "$WORK/header.txt"
+          ENTRY="$(awk '/Entry point address:/ {print $4}' "$WORK/header.txt")"
+          test "$ENTRY" = '0x400000'
+          "$WORK/probe"
+
+          printf 'x 0x400000 8\nbreak 0x400001\ncontinue\nquit\n' \
+            | "$DBG_BUILD/mdbg" "$WORK/probe" > "$WORK/mdbg.out" 2>&1
+          cat "$WORK/mdbg.out"
+          grep -q '^stopped after exec$' "$WORK/mdbg.out"
+          grep -Eq '0x400000:([[:space:]]+[0-9a-f]{2})+' "$WORK/mdbg.out"
+          grep -q 'Breakpoint 1 at 0x400001' "$WORK/mdbg.out"
+          grep -q 'breakpoint at 0x400001' "$WORK/mdbg.out"
