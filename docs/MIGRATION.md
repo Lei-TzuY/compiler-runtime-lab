@@ -18,7 +18,7 @@ This document is the durable migration ledger for `compiler-runtime-lab`.
 | sic-xe-assembler | `a58f4b5c7f34675fddf437d4af596cd81b5d891f` | **#30 open** — cross-domain memory/register CFG fixed point | Tests completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | **HOLD** |
 | mini-elf-toolchain | `3d452a8681bbfb092cd41465dba6f6eb97dfd224` | none | CI completed / success | complete reachable-history import scan passed | **IMPORTED / VERIFIED** |
 | mini-language-server | `74ecddce7061abc6cae467728d12599f3403c28c` | none | CI completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP |
-| mini-debugger | `f35d4f70075cbd95230dd37592c5d5a1a90a40a2` | none | CI completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP |
+| mini-debugger | `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` | none | CI `33928883989` completed / success | complete reachable-history import scan passed | **IMPORTED / VERIFIED** |
 | mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | none | CI completed / success | complete reachable-history import scan passed | **IMPORTED / VERIFIED** |
 | mini-wasm-runtime | `e923b27a2652aba88d50cdbb75d0fe959d40e457` | none | latest observed main workflow (`Differential reference smoke`) completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP; refresh all CI/fuzz/differential gates before freeze |
 | tiny-tensor-compiler | `8ebab53570adcdea8c483e301f07aab05e679426` | none | CI completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP |
@@ -139,6 +139,45 @@ Permanent umbrella CI was then added in `.github/workflows/mini-libc.yml`. Run `
 - `umbrella-mini-toolchain-bootstrap`: PASS
 
 The last job is the first real monorepo-internal integration edge: it builds `projects/mini-elf-toolchain` from the umbrella checkout, compiles mini-libc bootstrap inputs with the pinned external tiny-C compiler, links with the imported mini-ELF linker, executes the result, and runs the existing host-libc-independence inspection. Changes under either `projects/mini-libc/**` or `projects/mini-elf-toolchain/**` now retrigger this integration workflow.
+
+### mini-debugger — VERIFIED 2026-09-05
+
+- Source repository: `Lei-TzuY/mini-debugger`
+- Frozen source SHA: `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a`
+- Exact source CI run at freeze: `33928883989`, completed / success
+- First published verified migration-branch commit: `ae6f11bc676546a1e3ff178463f2284918f7e962`
+- Target: `projects/mini-debugger/`
+- Successful one-shot verification run: `33928967178`
+- Source open implementation PRs at freeze: `0`
+- Complete reachable source-history attribution scan: PASS for configured patterns
+- Non-squashed subtree ancestry: PASS
+- Blob-for-blob source-tree vs imported-subtree comparison: PASS
+- Native CMake build + CTest from umbrella path: PASS
+- One-shot workflow: removed before publication
+- Final source-head / umbrella-main / migration-branch race check: PASS
+- GitHub ancestry verification confirms source SHA `0ed0d52...` is the merge base/ancestor of the published migration branch, with `behind_by = 0`
+
+The mini-debugger migration also establishes the second real umbrella integration edge. The imported mini-ELF linker currently emits valid static `ET_EXEC` images without a section-header table (`e_shoff = 0`, `e_shnum = 0`). That means symbol-level debugger commands cannot honestly be required yet: there is no `.symtab` in this output to resolve. The integration test therefore locks the real current contract instead of inventing metadata:
+
+```text
+projects/mini-elf-toolchain
+        ↓
+sectionless ELF64 ET_EXEC, entry 0x400000
+        ↓
+projects/mini-debugger
+        ↓
+launch under ptrace
+        ↓
+read entry bytes at 0x400000
+        ↓
+set software breakpoint at numeric address 0x400001
+        ↓
+continue and observe breakpoint hit
+```
+
+This address-level chain passed in migration run `33928967178`. Symbol-level integration remains a future capability boundary: it requires the linker to emit suitable symbol/section metadata or a deliberately designed metadata handoff, not a weakened debugger assertion.
+
+Permanent `.github/workflows/mini-debugger.yml` protects both the debugger's native CTest suite and this mini-ELF address-level integration whenever either imported subtree changes.
 
 ## Source repository retirement policy
 

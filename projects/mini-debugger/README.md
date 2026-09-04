@@ -1,0 +1,124 @@
+# mini-debugger
+
+A compact x86-64 Linux debugger built directly on `ptrace(2)` with small in-tree ELF64 and DWARF parsers.
+
+Implemented now:
+
+- launch under `PTRACE_TRACEME` and attach to an existing PID with `PTRACE_ATTACH`
+- explicit launched-vs-attached process ownership and lifecycle states
+- safe detach that restores debugger-owned software breakpoints before releasing the tracee
+- x86-64 general-purpose register inspection
+- errno-correct memory reads
+- software breakpoints with saved-byte ownership, RIP repair, displaced-instruction single-step, and reinsertion
+- explicit signal suppression/forwarding policy
+- ELF64 `.symtab` / `.dynsym` parsing
+- PIE and shared-object load-bias resolution through `/proc/<pid>/maps`
+- symbol -> runtime address and runtime address -> symbol resolution
+- bounded module-aware `.eh_frame` CFI backtraces with validated frame-pointer fallback
+- module-aware ELF symbolization and DWARF v4 source mapping for backtrace frames
+- module-aware DWARF v4 address source presentation for `line` and `finish`
+- bounded DWARF v4 `.debug_line` address <-> file:line resolution
+- module-aware symbol and source breakpoints across currently loaded file-backed modules
+- bounded module-aware source-level `step` across DWARF v4 file:line transitions
+- module-aware source-level `next` for canonical x86-64 `E8 rel32`, unprefixed `FF /2` register-indirect calls, RIP-relative memory-indirect calls, base-register memory-indirect calls without displacement, non-SIB disp8/disp32 base-memory calls, no-displacement SIB base-memory calls, SIB no-base+disp32 calls, SIB disp8/disp32 base-memory calls, and the exact single-prefix `0x41` REX.B, `0x48` REX.W, and `0x49` REX.W+B register-indirect `FF /2 mod=3` forms such as `41 ff d0`, `48 ff d0`, and `49 ff d0`
+- module-aware `finish` through bounded `.eh_frame` CFI return-address recovery, with validated RBP fallback
+- deterministic PIE/non-PIE/stripped, omitted-frame-pointer, and shared-library fixture coverage
+
+## Build
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Requirements: Linux, x86-64, CMake 3.20+, and a C++17 compiler. The test environment must permit ptrace operations.
+
+## CLI
+
+Launch a new tracee:
+
+```text
+$ ./build/mdbg ./hello
+stopped after exec
+(mdbg) break main
+Breakpoint 1 at 0x55... (main)
+(mdbg) continue
+breakpoint at 0x55... (main)
+(mdbg) bt
+#0 0x55... main hello.c:12
+#1 0x7f... shared_worker+0x... shared_worker.c:31
+(mdbg) line main
+0x55... hello.c:12
+(mdbg) break hello.c:12
+Breakpoint 2 at 0x55... (hello.c:12)
+(mdbg) continue
+breakpoint at 0x55... (main+0x...)
+(mdbg) step
+0x55... hello.c:13
+(mdbg) next
+0x55... hello.c:14
+(mdbg) finish
+0x55... caller.c:27
+```
+
+Attach to an existing process:
+
+```text
+$ ./build/mdbg --attach 12345
+attached to process 12345
+(mdbg) regs
+...
+(mdbg) detach
+detached
+```
+
+Attach permission is governed by the host kernel's ptrace policy. Detaching restores all debugger-owned `INT3` bytes first; quitting an attached session also detaches instead of killing the target.
+
+Commands currently implemented: `continue`, `step`, `next`, `finish`, `stepi`, `regs`, `bt`, `line <address|symbol>`, `reg <name>`, `x <address|symbol> [length]`, `break <address|symbol|file:line>`, `delete <id>`, `info breakpoints`, `symbols [filter]`, `detach`, and `quit`.
+
+## Breakpoint invariant
+
+```text
+save original byte -> write 0xCC -> continue -> SIGTRAP
+-> RIP -= 1 -> restore original byte -> expose breakpoint stop
+-> single-step original instruction -> reinsert 0xCC -> continue/stop
+```
+
+The breakpoint table owns the saved byte. A breakpoint being stepped over is explicit debugger state, not a CLI convention. If an attached process is detached while stopped on a managed breakpoint, RIP already points back at the original instruction and detach leaves that original byte restored.
+
+## Backtrace and frame model
+
+`bt` resolves the file-backed mapping that contains each frame RIP through `/proc/<pid>/maps`, opens that module's ELF image, and evaluates its `.eh_frame`. It recovers caller RIP, uses CFA as caller RSP, and recovers caller RBP only when the active CFI rule explicitly describes it. The recovered cursor is then resolved again for the next module, so a backtrace can cross from an omitted-frame-pointer shared object back into the main executable without mutating the tracee. Parsed CFI modules are cached for the duration of one unwind. Anonymous mappings, deleted files, or modules without an applicable `.eh_frame` terminate the bounded CFI chain rather than being guessed.
+
+Frame rendering uses the same file-backed module routing independently of CFI evaluation. Each frame address is resolved against the ELF image that actually owns its mapping: `symbol+offset` uses that module's own runtime load bias, and a supported DWARF v4 `.debug_line` table supplies `file:line[:column]` from the same owning image. Anonymous or deleted mappings, missing symbols or line tables, unsupported DWARF versions, and module parse failures simply leave the unavailable presentation fields out; they do not invalidate an otherwise valid unwind.
+
+The implemented CFI subset deliberately targets ordinary GCC/Clang x86-64 CIE version 1 `zR` records using `DW_EH_PE_pcrel | DW_EH_PE_sdata4`, plus the common CFA location/offset/register/state opcodes exercised by deterministic fixtures. Unsupported encodings, augmentations, opcodes, malformed entries, or unreadable slots fail explicitly instead of being guessed. Shared-library support does not broaden that parser subset; it only routes each frame to the correct file-backed ELF image and load bias.
+
+If the starting instruction has no applicable file-backed CFI, `bt` falls back to the classic bounded RBP-chain unwinder. It does not silently switch to RBP after malformed or unsupported CFI has already been selected. The legacy RBP path still rejects non-monotonic, self-referential, or implausibly large frame-pointer jumps and returns a partial trace on unreadable memory.
+
+`finish` resolves the file-backed mapping that contains the stopped RIP and asks that module's `.eh_frame` to recover the caller return address against the complete live register set. If the current mapping is anonymous/deleted, the module has no applicable `.eh_frame`, or no FDE covers the current instruction, it falls back to the validated preserved-RBP frame record. Malformed or unsupported selected CFI remains an explicit error rather than a reason to silently trust RBP. Once a return address is known it continues to a normal managed temporary breakpoint there. Existing user breakpoints at the return address are preserved, while a breakpoint, signal, exit, or other stop before return interrupts `finish` and removes any temporary breakpoint it owned.
+
+## Source-line model
+
+`line <address>` resolves the file-backed module that owns the runtime address, reads that module's supported DWARF v4 `.debug_line`, and applies that module's own load bias before lookup. `line <symbol>` still resolves the symbol from the main executable first, then feeds the resulting runtime address through the same module-aware source presentation path. Rows are converted into bounded half-open address ranges; malformed units, compressed line sections, multi-operation instruction tables, DWARF64, and versions other than 4 are rejected instead of guessed.
+
+`break <symbol>` scans the tracee's currently loaded absolute file-backed mappings, deduplicates repeated mappings of the same ELF image, and resolves defined ELF symbols against each module's own load bias. Undefined imports are excluded by `ElfFile` parsing, modules that cannot be opened as supported ELF are skipped, and a name defined in more than one loaded module is rejected as ambiguous instead of silently choosing one. The unique runtime address, when found, is installed through the same managed software-breakpoint state machine as address and source breakpoints.
+
+Reverse `file:line -> address` lookup for source breakpoints scans the tracee's currently loaded absolute file-backed mappings, deduplicates repeated mappings of the same ELF image, and asks each supported DWARF v4 line table for the requested source row using that module's own load bias. Within one module, multiple emitted rows still choose the lowest virtual address and basename ambiguity is rejected by `DwarfLineTable`. If the same query resolves in more than one loaded module, the debugger rejects it as ambiguous instead of silently choosing one. Modules without supported line information are skipped. The resolved address is then installed through the normal managed software-breakpoint state machine.
+
+Both module-aware symbol and source breakpoint lookup are deliberately about modules that are loaded at the moment the command is issued. They do not implement dynamic-loader events or deferred breakpoints, so a shared object that has not been mapped yet cannot be targeted by symbol or source name until it is loaded.
+
+Address-based source presentation is module-aware for backtrace frames, `line`, and the stopped address printed after `finish`. Each lookup routes through the file-backed module that owns the runtime address, so a shared object's own `.debug_line` can supply `file:line[:column]` without confusing it with the main executable's load bias. Anonymous/deleted mappings and missing or unsupported line information produce no source location rather than being guessed.
+
+`step` is intentionally source-level while `stepi` remains one machine instruction. At every stop, source stepping resolves the current RIP through the ordinary file-backed module that owns it, applies that module's own load bias and supported DWARF v4 line table, and compares `module + file + line` with the starting position. It repeatedly delegates execution to the existing managed instruction-step path and stops at the first different mapped source position. A breakpoint currently pending displaced execution is therefore stepped correctly and reinserted by the same breakpoint state machine, including when that breakpoint lives in a shared object. A hard instruction bound prevents an unbounded walk through code without line information; signals, exits, and other non-single-step stops interrupt the operation instead of being hidden. If the starting RIP has no supported source mapping, `step` rejects the operation before executing an instruction.
+
+`next` uses the same module-aware `module + file + line` source identity and the same bounded instruction-driven fallback as `step`, but recognizes thirteen bounded x86-64 near-call classes before executing them: canonical `E8 rel32` direct calls (five bytes), unprefixed `FF /2` when ModRM has `mod=3` for register-indirect operands (two bytes), unprefixed `FF /2` when ModRM has `mod=0, r/m=5` for RIP-relative memory-indirect operands (`ff 15 disp32`, six bytes), unprefixed `FF /2` when ModRM has `mod=0, r/m` in `{0,1,2,3,6,7}` for base-register memory operands with no displacement or SIB (two bytes), unprefixed `FF /2` when ModRM has `mod=1, r/m!=4` for non-SIB base-register memory operands with an 8-bit displacement (three bytes, for example `ff 50 08`), unprefixed `FF /2` when ModRM has `mod=2, r/m!=4` for non-SIB base-register memory operands with a 32-bit displacement (six bytes, for example `ff 90 08 00 00 00`), unprefixed `FF /2` when ModRM has `mod=0, r/m=4` and the SIB base field is not 5 for SIB base-memory operands without displacement (three bytes, for example `ff 14 20`), unprefixed `FF /2` when ModRM has `mod=0, r/m=4` and the SIB base field is 5 for no-base indexed memory operands with the mandatory 32-bit displacement (seven bytes, for example `ff 14 05 00 00 00 00`), unprefixed `FF /2` when ModRM has `mod=1, r/m=4` for SIB base-memory operands with an 8-bit displacement (four bytes, for example `ff 54 20 08`), unprefixed `FF /2` when ModRM has `mod=2, r/m=4` for SIB base-memory operands with a 32-bit displacement (seven bytes, for example `ff 94 20 08 00 00 00`), the exact single-prefix `0x41` REX.B form followed by register-indirect `FF /2` with ModRM `mod=3` (three bytes, for example `41 ff d0` for `call *%r8`), the exact single-prefix `0x48` REX.W form followed by register-indirect `FF /2` with ModRM `mod=3` (three bytes, for example `48 ff d0` for `call *%rax`), and the exact single-prefix `0x49` REX.W+B form followed by register-indirect `FF /2` with ModRM `mod=3` (three bytes, for example `49 ff d0` for `call *%r8`). For any supported form it places a normal managed temporary breakpoint at `RIP + instruction_length`, continues through the callee, removes only the breakpoint it owns, and then resumes module-aware source-line comparison in the caller. This works when the current source row lives in the main executable or in an already loaded ordinary file-backed shared object. Existing user breakpoints take precedence and any breakpoint or signal encountered inside the callee interrupts `next` instead of being hidden. Other REX bytes, other prefixed indirect calls, multiple-prefix forms, tail calls, and other instruction forms are not decoded yet; on those forms `next` falls back to instruction-driven stepping and may enter the callee.
+
+`finish` is frame-oriented rather than line-driven. After it reaches the caller's saved return address, the CLI routes that stopped runtime address through the same module-aware DWARF source presentation used by `line`; execution itself does not depend on `.debug_line` information.
+
+Source display, DWARF5 line tables, broader CFI encodings/register recovery, deferred breakpoints for not-yet-loaded modules, and broader instruction decoding remain future work.
+
+## Current limits
+
+One traced process/thread only. Symbol and source breakpoints can resolve names across currently loaded ordinary file-backed modules; source `step` can use supported DWARF v4 line information across those modules, and source `next` can do the same while stepping over canonical `E8 rel32` direct calls, unprefixed `FF /2` register-indirect calls with ModRM `mod=3`, unprefixed RIP-relative `FF /2` memory-indirect calls with ModRM `mod=0, r/m=5`, unprefixed base-register memory-indirect `FF /2` calls with ModRM `mod=0, r/m` in `{0,1,2,3,6,7}`, unprefixed non-SIB disp8 memory-indirect `FF /2` calls with ModRM `mod=1, r/m!=4`, unprefixed non-SIB disp32 memory-indirect `FF /2` calls with ModRM `mod=2, r/m!=4`, unprefixed no-displacement SIB memory-indirect `FF /2` calls with ModRM `mod=0, r/m=4` when the SIB base field is not 5, unprefixed no-base SIB memory-indirect `FF /2` calls with ModRM `mod=0, r/m=4` and SIB base 5 using the mandatory disp32, unprefixed SIB disp8 memory-indirect `FF /2` calls with ModRM `mod=1, r/m=4`, unprefixed SIB disp32 memory-indirect `FF /2` calls with ModRM `mod=2, r/m=4`, plus the exact single-prefix `0x41` REX.B, `0x48` REX.W, and `0x49` REX.W+B register-indirect `FF /2 mod=3` forms. `bt`, address-based `line` presentation, and `finish` source presentation can route supported DWARF v4 source mapping across ordinary file-backed shared objects and the main executable. `bt` also routes the bounded CFI subset and ELF symbolization across modules while each next CFA can be computed from recovered `RSP`, `RBP`, or `RIP`; anonymous/deleted mappings and unsupported module CFI stop with a bounded partial trace, while unavailable presentation data is omitted. Cross-module ambiguity is rejected for both symbol and source breakpoint lookup, and neither lookup waits for modules loaded after the command. `line <symbol>`, `x <symbol>`, `symbols`, and ordinary breakpoint-stop symbol presentation remain main-executable-oriented. Hardware watchpoints, ELF extended section numbering, DWARF5 line tables, dynamic-loader breakpoint events, other REX/prefixed x86-64 call decoding, and non-x86-64/little-endian ELF are intentionally unsupported for now.

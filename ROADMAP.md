@@ -16,7 +16,7 @@ Before importing any project, establish an exact source commit and verify it aga
 - [ ] sic-xe-assembler — finish or close the active implementation PR before migration.
 - [x] mini-elf-toolchain — frozen at `3d452a8681bbfb092cd41465dba6f6eb97dfd224`; exact source/open-PR/CI/attribution gates passed immediately before import.
 - [ ] mini-language-server — refresh exact green source head and freeze import point.
-- [ ] mini-debugger — refresh exact green source head and freeze import point.
+- [x] mini-debugger — frozen at `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a`; exact source/open-PR/CI state refreshed immediately before import and complete reachable-history attribution scan passed.
 - [x] mini-libc — frozen at `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`; exact source/open-PR/CI/attribution gates passed immediately before import.
 - [ ] mini-wasm-runtime — refresh all applicable CI/fuzz/differential gates and freeze import point.
 - [ ] tiny-tensor-compiler — refresh exact green source head and freeze import point.
@@ -43,7 +43,7 @@ Suggested import order:
 
 1. [x] `mini-elf-toolchain` — **IMPORTED / VERIFIED**
 2. [x] `mini-libc` — **IMPORTED / VERIFIED**
-3. [ ] `mini-debugger`
+3. [x] `mini-debugger` — **IMPORTED / VERIFIED**
 4. [ ] `tiny-tensor-compiler`
 5. [ ] `mini-wasm-runtime`
 6. [ ] `mini-language-server`
@@ -63,20 +63,21 @@ For each remaining import:
 - [ ] run project tests/build/checks from the umbrella layout;
 - [ ] record verification evidence in `docs/MIGRATION.md`.
 
-The reference process now has two successful imports. `mini-elf-toolchain` and `mini-libc` both retain their exact frozen source commits in umbrella ancestry, both were compared against their source trees, both passed project-native gates in the umbrella layout, and both have permanent CI after import.
+Three imports now satisfy the reference process: `mini-elf-toolchain`, `mini-libc`, and `mini-debugger` retain their frozen source commits in umbrella ancestry, match their source trees, pass project-native gates in the umbrella layout, and have permanent integration-aware CI.
 
 ## Phase 3 — Umbrella integration
 
-The two-import threshold has been reached.
+The umbrella is now actively testing composition rather than only storing independent subtrees.
 
-- [x] add path-scoped CI for the first two imported projects without weakening project-local gates;
+- [x] add path-scoped CI for imported projects without weakening project-local gates;
 - [x] establish the first real cross-project bootstrap edge: pinned `tiny-c-compiler` → imported `mini-libc` → imported `mini-elf-toolchain` → executable;
+- [x] establish the second real cross-project edge: imported `mini-elf-toolchain` → sectionless ET_EXEC → imported `mini-debugger` → memory read + numeric breakpoint;
 - [ ] document the full cross-project dependency graph as additional projects are imported;
 - [ ] add reproducible cross-project bootstrap/integration tests for later imported pairs where they already exist conceptually;
 - [ ] define a common top-level developer entrypoint without forcing projects into one build system;
 - [ ] preserve project independence: each subtree should remain understandable and testable on its own.
 
-Current verified chain:
+Current verified chains:
 
 ```text
 pinned tiny-c-compiler
@@ -90,12 +91,26 @@ freestanding x86-64 executable
 execution + host-libc-independence inspection
 ```
 
-The remaining planned relationships include:
+```text
+projects/mini-elf-toolchain
+        ↓
+sectionless ELF64 ET_EXEC (entry 0x400000)
+        ↓
+projects/mini-debugger
+        ↓
+ptrace launch + entry-byte read
+        ↓
+numeric software breakpoint at 0x400001
+        ↓
+continue + breakpoint hit
+```
+
+The second chain deliberately does not claim symbol-level interoperability yet. Current mini-ELF executables have no section-header table or `.symtab`; symbol-level debugging becomes valid only after the linker emits suitable metadata or an explicit metadata handoff is designed.
+
+Remaining planned relationships include:
 
 ```text
 Nova → mini-language-server
-
-mini-elf-toolchain → mini-debugger
 
 mini-wasm-runtime → conformance/differential reference tooling
 

@@ -13,7 +13,7 @@ This repository is intentionally being assembled with **history-preserving migra
 | [sic-xe-assembler](https://github.com/Lei-TzuY/sic-xe-assembler) | SIC/XE assembler and static-analysis tooling | HOLD — open implementation PR |
 | [mini-elf-toolchain](projects/mini-elf-toolchain) | ELF/static-linking toolchain | **IMPORTED / VERIFIED** |
 | [mini-language-server](https://github.com/Lei-TzuY/mini-language-server) | Version-safe semantic/LSP tooling | READY FOR IMPORT PREP |
-| [mini-debugger](https://github.com/Lei-TzuY/mini-debugger) | ptrace-based debugger | READY FOR IMPORT PREP |
+| [mini-debugger](projects/mini-debugger) | ptrace-based debugger | **IMPORTED / VERIFIED** |
 | [mini-libc](projects/mini-libc) | Freestanding libc subset and bootstrap target | **IMPORTED / VERIFIED** |
 | [mini-wasm-runtime](https://github.com/Lei-TzuY/mini-wasm-runtime) | WebAssembly parser, validator, runtime and conformance lab | READY FOR IMPORT PREP |
 | [tiny-tensor-compiler](https://github.com/Lei-TzuY/tiny-tensor-compiler) | Tensor IR, optimization and native compilation | READY FOR IMPORT PREP |
@@ -32,24 +32,26 @@ compiler-runtime-lab/
 └── projects/
     ├── mini-elf-toolchain/      # imported + verified
     ├── mini-libc/               # imported + verified
+    ├── mini-debugger/           # imported + verified
     ├── Nova/                    # planned
     ├── tiny-c-compiler/         # attribution review
     ├── sic-xe-assembler/        # hold: active PR
     ├── mini-language-server/    # planned
-    ├── mini-debugger/           # planned
     ├── mini-wasm-runtime/       # planned
     └── tiny-tensor-compiler/    # planned
 ```
 
 A planned project directory is created only by a verified history-preserving import. Do not replace this process with ZIP/download-and-copy commits.
 
-## Verified imports and first integration chain
+## Verified imports and integration chains
 
 `mini-elf-toolchain` is the reference migration. Source SHA `3d452a8681bbfb092cd41465dba6f6eb97dfd224` was imported without squashing into `projects/mini-elf-toolchain/`. The source commit remains reachable in umbrella history, the subtree was verified blob-for-blob against the frozen source tree, its native Rust formatter/Clippy/test gates passed from the umbrella path, and a permanent path-scoped umbrella workflow protects future changes.
 
 `mini-libc` followed the same history-preserving process from source SHA `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`. Its GCC and Clang runtime probes, host-libc-independence checks, pinned tiny-C bootstrap, and source-style three-repository bootstrap all passed before publication. The frozen source contains README/docs/Makefile but no top-level LICENSE file; that source state was preserved exactly rather than inventing licensing metadata.
 
-The umbrella now has its first real internal integration edge:
+`mini-debugger` was imported from source SHA `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` after its exact source CI, complete reachable-history attribution scan, native CMake/CTest suite, ancestry check, and blob-for-blob subtree comparison passed. It is protected by a permanent umbrella workflow together with the imported mini-ELF toolchain.
+
+The umbrella currently exercises two real integration chains.
 
 ```text
 pinned tiny-c-compiler
@@ -63,7 +65,21 @@ freestanding x86-64 executable
 execution + host-libc-independence inspection
 ```
 
-Permanent `.github/workflows/mini-libc.yml` CI reruns this chain when either imported mini-libc or mini-ELF code changes. This is intentionally stronger than merely storing two unrelated subtrees beside each other: the umbrella actively checks that they still compose.
+```text
+projects/mini-elf-toolchain
+        ↓
+sectionless ELF64 ET_EXEC, entry 0x400000
+        ↓
+projects/mini-debugger
+        ↓
+ptrace launch + memory read
+        ↓
+numeric software breakpoint at 0x400001
+        ↓
+continue + breakpoint hit
+```
+
+The second chain intentionally validates address-level interoperability. The current mini-ELF executable writer emits no section-header table (`e_shoff = 0`, `e_shnum = 0`), so it would be false to claim `.symtab`-based debugging for these generated images. Symbol-level interoperability is a future capability boundary for the linker/metadata layer, not something hidden by a weaker test.
 
 See [docs/MIGRATION.md](docs/MIGRATION.md) for the full evidence ledger.
 
