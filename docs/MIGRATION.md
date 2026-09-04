@@ -21,7 +21,7 @@ This document is the durable migration ledger for `compiler-runtime-lab`.
 | mini-debugger | `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` | none | CI `33928883989` completed / success | complete reachable-history import scan passed | **IMPORTED / VERIFIED** |
 | mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | none | CI completed / success | complete reachable-history import scan passed | **IMPORTED / VERIFIED** |
 | mini-wasm-runtime | `e923b27a2652aba88d50cdbb75d0fe959d40e457` | none | latest observed main workflow (`Differential reference smoke`) completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP; refresh all CI/fuzz/differential gates before freeze |
-| tiny-tensor-compiler | `8ebab53570adcdea8c483e301f07aab05e679426` | none | CI completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP |
+| tiny-tensor-compiler | `66ff2c6d02a22c621d01579b442af8b6fd43bcc5` | none | CI `33928929309` completed / success | complete reachable-history import scan passed | **IMPORTED / VERIFIED** |
 
 ### Important limitations of the first-pass attribution search
 
@@ -51,8 +51,6 @@ Immediately before importing a project:
 
 Use a real Git client. Do **not** download ZIPs or copy only the current tree.
 
-Example:
-
 ```bash
 git clone https://github.com/Lei-TzuY/compiler-runtime-lab.git
 cd compiler-runtime-lab
@@ -65,9 +63,7 @@ git subtree add \
   source-mini-elf main
 ```
 
-Do not use `--squash` when the purpose is to preserve source history.
-
-Alternative: use `git filter-repo --to-subdirectory-filter projects/<project>` in a temporary clone, then merge the rewritten history into the umbrella. This gives more explicit control over path rewriting and is preferred when attribution/history surgery is intentionally required.
+Do not use `--squash` when the purpose is to preserve source history. `git filter-repo --to-subdirectory-filter projects/<project>` in a temporary clone is an alternative when an explicitly documented history transformation is required.
 
 ## Verification after each import
 
@@ -104,9 +100,7 @@ For the selected source commit `SOURCE_SHA` and imported umbrella commit `UMBREL
 - One-shot workflow: removed before final push
 - Final race check: PASS
 
-Post-publication verification through GitHub also confirms `3d452a86...` is the merge base/ancestor of current umbrella history (`behind_by = 0` when compared to the first published verified main), and the imported project README exists at the expected target path.
-
-The first four staging attempts were fail-closed while the migration harness itself was hardened (merge-parent preservation, build-artifact isolation, workflow context, generated lock handling). None of those failed runs published an imported project tree. The successful fifth run passed every gate before pushing.
+Post-publication verification through GitHub confirms `3d452a86...` remains an ancestor with `behind_by = 0`. The first four staging attempts were fail-closed while the migration harness itself was hardened; none published an imported project tree.
 
 ### mini-libc — VERIFIED 2026-09-05
 
@@ -117,47 +111,32 @@ The first four staging attempts were fail-closed while the migration harness its
 - Successful one-shot verification run: `33927869512`
 - Source open implementation PRs at freeze: `0`
 - Exact source main CI run at freeze: `33842616621`, completed / success
-- Complete reachable source-history attribution scan: PASS for configured patterns
-- Non-squashed subtree ancestry: PASS
-- Blob-for-blob source-tree vs imported-subtree comparison: PASS
-- GCC `make clean test` + `make inspect`: PASS
-- Clang `make clean test` + `make inspect`: PASS
-- Pinned `tiny-c-compiler` bootstrap at `5607c3152d319353c42f05ed44ff53479272a74f`: PASS
-- Pinned source-style three-repo bootstrap using `mini-elf-toolchain@3e0f2da92e21b9399dfa4139b56c2b6b52c3c1a5`: PASS
-- Build-output cleanup / clean working tree: PASS
-- One-shot workflow: removed before final push
-- Final source-head/open-PR/umbrella-main race check: PASS
-- Frozen source repository has README/docs/Makefile but no top-level LICENSE file; the import preserved that fact exactly and did not invent licensing metadata
+- Complete reachable source-history attribution scan: PASS
+- Non-squashed subtree ancestry / blob equivalence: PASS
+- GCC and Clang `make clean test` + `make inspect`: PASS
+- Pinned `tiny-c-compiler` bootstrap: PASS
+- Pinned source-style three-repo bootstrap with mini-ELF: PASS
+- Build-output cleanup / clean tree / one-shot cleanup / final race check: PASS
+- Frozen source has no top-level LICENSE; migration preserved that fact exactly
 
-Post-publication GitHub ancestry verification confirms `a9d2a1d9...` is the merge base/ancestor of umbrella commit `26cd2386...`, with `behind_by = 0`.
-
-Permanent umbrella CI was then added in `.github/workflows/mini-libc.yml`. Run `33927981587` passed all jobs:
-
-- `runtime (gcc)`: PASS
-- `runtime (clang)`: PASS
-- `tiny-c-bootstrap`: PASS
-- `umbrella-mini-toolchain-bootstrap`: PASS
-
-The last job is the first real monorepo-internal integration edge: it builds `projects/mini-elf-toolchain` from the umbrella checkout, compiles mini-libc bootstrap inputs with the pinned external tiny-C compiler, links with the imported mini-ELF linker, executes the result, and runs the existing host-libc-independence inspection. Changes under either `projects/mini-libc/**` or `projects/mini-elf-toolchain/**` now retrigger this integration workflow.
+Permanent umbrella CI run `33927981587` passed runtime GCC, runtime Clang, tiny-C bootstrap, and the imported mini-ELF toolchain bootstrap.
 
 ### mini-debugger — VERIFIED 2026-09-05
 
 - Source repository: `Lei-TzuY/mini-debugger`
 - Frozen source SHA: `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a`
-- Exact source CI run at freeze: `33928883989`, completed / success
+- Exact source CI run: `33928883989`, completed / success
 - First published verified migration-branch commit: `ae6f11bc676546a1e3ff178463f2284918f7e962`
 - Target: `projects/mini-debugger/`
 - Successful one-shot verification run: `33928967178`
 - Source open implementation PRs at freeze: `0`
-- Complete reachable source-history attribution scan: PASS for configured patterns
-- Non-squashed subtree ancestry: PASS
-- Blob-for-blob source-tree vs imported-subtree comparison: PASS
-- Native CMake build + CTest from umbrella path: PASS
-- One-shot workflow: removed before publication
-- Final source-head / umbrella-main / migration-branch race check: PASS
-- GitHub ancestry verification confirms source SHA `0ed0d52...` is the merge base/ancestor of the published migration branch, with `behind_by = 0`
+- Complete reachable source-history attribution scan: PASS
+- Non-squashed ancestry / blob equivalence / native CMake + CTest: PASS
+- One-shot cleanup / final race checks: PASS
+- Merged to umbrella main with a normal merge commit, preserving source ancestry
+- Post-merge umbrella run `33929397068`: native PASS; mini-ELF integration PASS
 
-The mini-debugger migration also establishes the second real umbrella integration edge. The imported mini-ELF linker currently emits valid static `ET_EXEC` images without a section-header table (`e_shoff = 0`, `e_shnum = 0`). That means symbol-level debugger commands cannot honestly be required yet: there is no `.symtab` in this output to resolve. The integration test therefore locks the real current contract instead of inventing metadata:
+The mini-debugger integration locks the real current boundary rather than inventing metadata:
 
 ```text
 projects/mini-elf-toolchain
@@ -166,18 +145,36 @@ sectionless ELF64 ET_EXEC, entry 0x400000
         ↓
 projects/mini-debugger
         ↓
-launch under ptrace
+launch + memory read
         ↓
-read entry bytes at 0x400000
+numeric breakpoint at 0x400001
         ↓
-set software breakpoint at numeric address 0x400001
-        ↓
-continue and observe breakpoint hit
+continue + breakpoint hit
 ```
 
-This address-level chain passed in migration run `33928967178`. Symbol-level integration remains a future capability boundary: it requires the linker to emit suitable symbol/section metadata or a deliberately designed metadata handoff, not a weakened debugger assertion.
+Current mini-ELF output has no section-header table / `.symtab`, so symbol-level interoperability remains a future linker/metadata capability.
 
-Permanent `.github/workflows/mini-debugger.yml` protects both the debugger's native CTest suite and this mini-ELF address-level integration whenever either imported subtree changes.
+### tiny-tensor-compiler — VERIFIED 2026-09-05
+
+- Source repository: `Lei-TzuY/tiny-tensor-compiler`
+- Frozen source SHA: `66ff2c6d02a22c621d01579b442af8b6fd43bcc5`
+- Exact source CI run at freeze: `33928929309`, completed / success
+- First published verified migration-branch commit: `53a48fb97ebb8ea9139a349f1a4948fe3c5faa94`
+- Target: `projects/tiny-tensor-compiler/`
+- Successful one-shot verification run: `33929543578`
+- Source open implementation PRs at freeze: `0`
+- Complete reachable source-history attribution scan: PASS for configured patterns
+- Non-squashed subtree ancestry: PASS
+- Blob-for-blob source-tree vs imported-subtree comparison: PASS
+- Python 3.13 editable install + `ruff check .` + `pytest`: PASS from the umbrella path
+- Clean tracked tree after validation: PASS
+- One-shot workflow removed before publication: PASS
+- Final source-head / umbrella-main / migration-branch race check: PASS
+- Frozen source includes README, CHANGELOG, docs and `pyproject.toml` but no top-level LICENSE file; migration preserves that source state exactly
+
+Permanent `.github/workflows/tiny-tensor-compiler.yml` mirrors the source CI matrix across Ubuntu/Windows and Python 3.11/3.13.
+
+No direct mini-ELF integration is claimed yet. The current tiny-tensor native backend emits deterministic C11, invokes the host GCC/Clang/MSVC toolchain to create a shared library, and loads it through `ctypes`; the current mini-ELF project links static object/archive input into `ET_EXEC`. A real cross-project edge therefore requires an explicitly designed object/static-runtime handoff or another executable-artifact contract. Treating the existing shared-library ABI as if it were already compatible with the static linker would be misleading.
 
 ## Source repository retirement policy
 
