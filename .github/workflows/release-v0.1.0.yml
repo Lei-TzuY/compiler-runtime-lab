@@ -91,7 +91,12 @@ jobs:
                 .filter(ref => ref && ref !== 'main')
             );
 
-            for (const ref of ['noop', '__should_not__', 'tmp-noop-source-next-squash']) {
+            for (const ref of [
+              'noop',
+              '__should_not__',
+              'tmp-noop-source-next-squash',
+              'feat/module-aware-bt-source-pr-sentinel',
+            ]) {
               mergedHeads.add(ref);
             }
 
