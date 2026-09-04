@@ -17,7 +17,7 @@ Before importing any project, establish an exact source commit and verify it aga
 - [x] mini-elf-toolchain — frozen at `3d452a8681bbfb092cd41465dba6f6eb97dfd224`; exact source/open-PR/CI/attribution gates passed immediately before import.
 - [ ] mini-language-server — refresh exact green source head and freeze import point.
 - [ ] mini-debugger — refresh exact green source head and freeze import point.
-- [ ] mini-libc — refresh exact green source head and freeze import point.
+- [x] mini-libc — frozen at `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`; exact source/open-PR/CI/attribution gates passed immediately before import.
 - [ ] mini-wasm-runtime — refresh all applicable CI/fuzz/differential gates and freeze import point.
 - [ ] tiny-tensor-compiler — refresh exact green source head and freeze import point.
 
@@ -42,7 +42,7 @@ projects/tiny-tensor-compiler/
 Suggested import order:
 
 1. [x] `mini-elf-toolchain` — **IMPORTED / VERIFIED**
-2. [ ] `mini-libc`
+2. [x] `mini-libc` — **IMPORTED / VERIFIED**
 3. [ ] `mini-debugger`
 4. [ ] `tiny-tensor-compiler`
 5. [ ] `mini-wasm-runtime`
@@ -56,31 +56,44 @@ The order is intentionally conservative: start with smaller, independently verif
 For each remaining import:
 
 - [ ] preserve reachable commit history;
-- [ ] preserve project-local license and documentation;
+- [ ] preserve existing project-local license files and documentation, or explicitly document license-file absence;
 - [ ] record exact source repository and source commit;
 - [ ] verify imported tree equivalence at the selected source commit;
 - [ ] verify no migration-only files leaked into the project tree;
 - [ ] run project tests/build/checks from the umbrella layout;
 - [ ] record verification evidence in `docs/MIGRATION.md`.
 
-The first import established the reference process: `mini-elf-toolchain` source SHA `3d452a86...` is an ancestor of the umbrella main, its subtree matched the frozen source blob-for-blob, project-native formatter/Clippy/tests passed in the umbrella path, generated migration-only `Cargo.lock` was removed, and the one-shot import workflow removed itself before publication.
+The reference process now has two successful imports. `mini-elf-toolchain` and `mini-libc` both retain their exact frozen source commits in umbrella ancestry, both were compared against their source trees, both passed project-native gates in the umbrella layout, and both have permanent CI after import.
 
 ## Phase 3 — Umbrella integration
 
-After at least two verified imports:
+The two-import threshold has been reached.
 
-- [ ] add path-scoped CI orchestration without weakening project-local gates;
-- [ ] document cross-project dependency relationships;
-- [ ] add reproducible cross-project bootstrap/integration tests where they already exist conceptually;
+- [x] add path-scoped CI for the first two imported projects without weakening project-local gates;
+- [x] establish the first real cross-project bootstrap edge: pinned `tiny-c-compiler` → imported `mini-libc` → imported `mini-elf-toolchain` → executable;
+- [ ] document the full cross-project dependency graph as additional projects are imported;
+- [ ] add reproducible cross-project bootstrap/integration tests for later imported pairs where they already exist conceptually;
 - [ ] define a common top-level developer entrypoint without forcing projects into one build system;
 - [ ] preserve project independence: each subtree should remain understandable and testable on its own.
 
-Potential cross-project chains include:
+Current verified chain:
+
+```text
+pinned tiny-c-compiler
+        ↓
+projects/mini-libc
+        ↓
+projects/mini-elf-toolchain
+        ↓
+freestanding x86-64 executable
+        ↓
+execution + host-libc-independence inspection
+```
+
+The remaining planned relationships include:
 
 ```text
 Nova → mini-language-server
-
-tiny-c-compiler → mini-libc → mini-elf-toolchain → executable
 
 mini-elf-toolchain → mini-debugger
 
