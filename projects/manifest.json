@@ -65,9 +65,14 @@
       "source_repository": "Lei-TzuY/mini-libc",
       "target_path": "projects/mini-libc",
       "observed_main_sha": "a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1",
-      "status": "ready-for-import-prep",
+      "status": "imported-verified",
       "blocker": null,
-      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+      "imported_source_sha": "a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1",
+      "verified_umbrella_sha": "26cd23866580026bc9d72644da3fda9e25d18828",
+      "verification_run_id": 33927869512,
+      "umbrella_ci_run_id": 33927981587,
+      "repository_hygiene_notes": "Frozen source contains README/docs/Makefile but no top-level LICENSE file; migration preserved the source tree exactly and did not invent licensing metadata.",
+      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry, the subtree matched source blob-for-blob, and permanent umbrella CI passed GCC, Clang, tiny-c bootstrap, and imported mini-elf integration."
     },
     {
       "name": "mini-wasm-runtime",
