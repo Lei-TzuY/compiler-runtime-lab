@@ -1,0 +1,101 @@
+name: mini-libc
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'projects/mini-libc/**'
+      - 'projects/mini-elf-toolchain/**'
+      - '.github/workflows/mini-libc.yml'
+  pull_request:
+    paths:
+      - 'projects/mini-libc/**'
+      - 'projects/mini-elf-toolchain/**'
+      - '.github/workflows/mini-libc.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mini-libc-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TINY_C_SHA: 5607c3152d319353c42f05ed44ff53479272a74f
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    defaults:
+      run:
+        working-directory: projects/mini-libc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and run probes
+        run: make clean test CC=${{ matrix.cc }}
+
+      - name: Verify host-libc independence
+        run: make inspect CC=${{ matrix.cc }}
+
+  tiny-c-bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check out pinned tiny-c-compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          TINY_C_DIR="$RUNNER_TEMP/tiny-c-compiler"
+          git clone --quiet https://github.com/Lei-TzuY/tiny-c-compiler.git "$TINY_C_DIR"
+          git -C "$TINY_C_DIR" checkout --quiet "$TINY_C_SHA"
+          make -C "$TINY_C_DIR" minicc
+
+      - name: Compile and run mini-libc through tiny-c-compiler
+        shell: bash
+        working-directory: projects/mini-libc
+        run: |
+          set -euo pipefail
+          MINICC="$RUNNER_TEMP/tiny-c-compiler/minicc" \
+            ./tests/verify-tiny-c-compiler.sh
+
+  umbrella-mini-toolchain-bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout umbrella
+        uses: actions/checkout@v4
+
+      - name: Build pinned tiny-c-compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          TINY_C_DIR="$RUNNER_TEMP/tiny-c-compiler"
+          git clone --quiet https://github.com/Lei-TzuY/tiny-c-compiler.git "$TINY_C_DIR"
+          git -C "$TINY_C_DIR" checkout --quiet "$TINY_C_SHA"
+          make -C "$TINY_C_DIR" minicc
+
+      - name: Build imported mini-elf-toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/mini-elf-target"
+          cargo build \
+            --manifest-path projects/mini-elf-toolchain/Cargo.toml \
+            --bin mini-elf-toolchain
+
+      - name: Compile, link, run, and inspect the umbrella bootstrap
+        shell: bash
+        working-directory: projects/mini-libc
+        run: |
+          set -euo pipefail
+          MINICC="$RUNNER_TEMP/tiny-c-compiler/minicc" \
+          MINI_ELF_LINKER="$RUNNER_TEMP/mini-elf-target/debug/mini-elf-toolchain" \
+          OUT=build/umbrella-mini-toolchain-integration \
+            ./tests/verify-tiny-c-compiler.sh
