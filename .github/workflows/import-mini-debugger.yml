@@ -106,7 +106,7 @@ jobs:
           cmake --build "$DBG_BUILD" --parallel 2
           ctest --test-dir "$DBG_BUILD" --output-on-failure
 
-      - name: Verify mini-ELF to mini-debugger integration
+      - name: Verify headerless mini-ELF to mini-debugger integration
         shell: bash
         run: |
           set -euo pipefail
@@ -121,13 +121,9 @@ jobs:
           .type _start,@function
           _start:
               nop
-          .globl probe
-          .type probe,@function
-          probe:
               mov $60, %eax
               xor %edi, %edi
               syscall
-          .size probe, .-probe
           .size _start, .-_start
           EOF
 
@@ -136,17 +132,29 @@ jobs:
           cargo build --manifest-path projects/mini-elf-toolchain/Cargo.toml --bin mini-elf-toolchain
           "$ELF_TARGET/debug/mini-elf-toolchain" link -o "$WORK/probe" "$WORK/probe.o"
           chmod +x "$WORK/probe"
-          readelf -h "$WORK/probe" | grep -q 'Class:.*ELF64'
-          readelf -s "$WORK/probe" | grep -Eq '[[:space:]]probe$'
+
+          HEADER="$WORK/header.txt"
+          readelf -h "$WORK/probe" | tee "$HEADER"
+          grep -q 'Class:.*ELF64' "$HEADER"
+          grep -q 'Type:.*EXEC' "$HEADER"
+          grep -Eq 'Start of section headers:[[:space:]]+0' "$HEADER"
+          grep -Eq 'Number of section headers:[[:space:]]+0' "$HEADER"
+          ENTRY="$(awk '/Entry point address:/ {print $4}' "$HEADER")"
+          test "$ENTRY" = '0x400000'
+          PROBE='0x400001'
           "$WORK/probe"
 
-          printf 'symbols probe\nbreak probe\ncontinue\nquit\n' \
+          set +e
+          printf 'x %s 8\nbreak %s\ncontinue\nquit\n' "$ENTRY" "$PROBE" \
             | "$DBG_BUILD/mdbg" "$WORK/probe" > "$WORK/mdbg.out" 2>&1
+          MDBG_STATUS=$?
+          set -e
           cat "$WORK/mdbg.out"
+          test "$MDBG_STATUS" -eq 0
           grep -q '^stopped after exec$' "$WORK/mdbg.out"
-          grep -Eq '0x[0-9a-f]+ probe$' "$WORK/mdbg.out"
-          grep -Eq 'Breakpoint 1 at 0x[0-9a-f]+ \(probe\)' "$WORK/mdbg.out"
-          grep -Eq 'breakpoint at 0x[0-9a-f]+ \(probe\)' "$WORK/mdbg.out"
+          grep -Eq "0x400000:([[:space:]]+[0-9a-f]{2})+" "$WORK/mdbg.out"
+          grep -q 'Breakpoint 1 at 0x400001' "$WORK/mdbg.out"
+          grep -q 'breakpoint at 0x400001' "$WORK/mdbg.out"
 
       - name: Clean generated umbrella artifacts and require clean tree
         shell: bash
