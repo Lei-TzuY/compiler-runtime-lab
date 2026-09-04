@@ -19,7 +19,7 @@ This document is the durable migration ledger for `compiler-runtime-lab`.
 | mini-elf-toolchain | `3d452a8681bbfb092cd41465dba6f6eb97dfd224` | none | CI completed / success | complete reachable-history import scan passed | **IMPORTED / VERIFIED** |
 | mini-language-server | `74ecddce7061abc6cae467728d12599f3403c28c` | none | CI completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP |
 | mini-debugger | `f35d4f70075cbd95230dd37592c5d5a1a90a40a2` | none | CI completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP |
-| mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | none | CI completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP |
+| mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | none | CI completed / success | complete reachable-history import scan passed | **IMPORTED / VERIFIED** |
 | mini-wasm-runtime | `e923b27a2652aba88d50cdbb75d0fe959d40e457` | none | latest observed main workflow (`Differential reference smoke`) completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP; refresh all CI/fuzz/differential gates before freeze |
 | tiny-tensor-compiler | `8ebab53570adcdea8c483e301f07aab05e679426` | none | CI completed / success | no `Claude` / `Anthropic` commit-message hits in candidate set search | READY FOR IMPORT PREP |
 
@@ -43,7 +43,7 @@ Immediately before importing a project:
 3. Confirm no active implementation PR for that repository.
 4. Confirm all required source CI/checks are completed and successful for the exact source candidate.
 5. Run a complete reachable-history attribution scan locally or in the guarded migration runner.
-6. Confirm README and project-local license/documentation are present and will remain inside the imported subtree.
+6. Confirm README/documentation are present, preserve every existing project-local license file, and explicitly document license-file absence rather than inventing licensing metadata.
 7. Check for generated binaries, huge artifacts, secrets, local caches, vendored dependency accidents, and temporary migration workflows/scripts.
 8. Freeze the source SHA in this ledger before performing the import.
 
@@ -107,6 +107,38 @@ For the selected source commit `SOURCE_SHA` and imported umbrella commit `UMBREL
 Post-publication verification through GitHub also confirms `3d452a86...` is the merge base/ancestor of current umbrella history (`behind_by = 0` when compared to the first published verified main), and the imported project README exists at the expected target path.
 
 The first four staging attempts were fail-closed while the migration harness itself was hardened (merge-parent preservation, build-artifact isolation, workflow context, generated lock handling). None of those failed runs published an imported project tree. The successful fifth run passed every gate before pushing.
+
+### mini-libc — VERIFIED 2026-09-05
+
+- Source repository: `Lei-TzuY/mini-libc`
+- Frozen source SHA: `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`
+- First published verified umbrella main: `26cd23866580026bc9d72644da3fda9e25d18828`
+- Target: `projects/mini-libc/`
+- Successful one-shot verification run: `33927869512`
+- Source open implementation PRs at freeze: `0`
+- Exact source main CI run at freeze: `33842616621`, completed / success
+- Complete reachable source-history attribution scan: PASS for configured patterns
+- Non-squashed subtree ancestry: PASS
+- Blob-for-blob source-tree vs imported-subtree comparison: PASS
+- GCC `make clean test` + `make inspect`: PASS
+- Clang `make clean test` + `make inspect`: PASS
+- Pinned `tiny-c-compiler` bootstrap at `5607c3152d319353c42f05ed44ff53479272a74f`: PASS
+- Pinned source-style three-repo bootstrap using `mini-elf-toolchain@3e0f2da92e21b9399dfa4139b56c2b6b52c3c1a5`: PASS
+- Build-output cleanup / clean working tree: PASS
+- One-shot workflow: removed before final push
+- Final source-head/open-PR/umbrella-main race check: PASS
+- Frozen source repository has README/docs/Makefile but no top-level LICENSE file; the import preserved that fact exactly and did not invent licensing metadata
+
+Post-publication GitHub ancestry verification confirms `a9d2a1d9...` is the merge base/ancestor of umbrella commit `26cd2386...`, with `behind_by = 0`.
+
+Permanent umbrella CI was then added in `.github/workflows/mini-libc.yml`. Run `33927981587` passed all jobs:
+
+- `runtime (gcc)`: PASS
+- `runtime (clang)`: PASS
+- `tiny-c-bootstrap`: PASS
+- `umbrella-mini-toolchain-bootstrap`: PASS
+
+The last job is the first real monorepo-internal integration edge: it builds `projects/mini-elf-toolchain` from the umbrella checkout, compiles mini-libc bootstrap inputs with the pinned external tiny-C compiler, links with the imported mini-ELF linker, executes the result, and runs the existing host-libc-independence inspection. Changes under either `projects/mini-libc/**` or `projects/mini-elf-toolchain/**` now retrigger this integration workflow.
 
 ## Source repository retirement policy
 
