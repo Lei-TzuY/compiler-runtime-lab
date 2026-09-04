@@ -1,0 +1,13 @@
+[package]
+name = "mini-elf-toolchain"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.81"
+description = "A small, correctness-focused ELF64 x86-64 toolchain laboratory"
+license = "MIT"
+
+[lib]
+name = "mini_elf_toolchain"
+path = "src/lib.rs"
+
+[dev-dependencies]

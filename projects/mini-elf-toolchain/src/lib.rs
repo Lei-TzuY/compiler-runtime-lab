@@ -1,0 +1,29 @@
+#![forbid(unsafe_code)]
+
+pub mod archive;
+pub mod archive_index;
+pub mod archive_lazy;
+pub mod elf64;
+pub mod executable_pipeline;
+pub mod executable_writer;
+pub mod input_object;
+pub mod layout;
+pub mod library_search;
+pub mod link_context;
+pub mod link_map;
+pub mod link_relocations;
+pub mod link_symbols;
+pub mod linker_input;
+pub mod load_segments;
+pub mod object_symbols;
+pub mod ordered_inputs;
+pub mod output_image;
+pub mod permission_layout;
+pub mod rela_apply;
+pub mod relocated_sections;
+pub mod relocations;
+pub mod resolve;
+pub mod static_link;
+pub mod symbol_addresses;
+pub mod symbol_names;
+pub mod x86_64_relocations;
