@@ -19,7 +19,7 @@ Before importing any project, establish an exact source commit and verify it aga
 - [x] mini-debugger — frozen at `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a`; exact source/open-PR/CI state refreshed immediately before import and complete reachable-history attribution scan passed.
 - [x] mini-libc — frozen at `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`; exact source/open-PR/CI/attribution gates passed immediately before import.
 - [ ] mini-wasm-runtime — refresh all applicable CI/fuzz/differential gates and freeze import point.
-- [ ] tiny-tensor-compiler — refresh exact green source head and freeze import point.
+- [x] tiny-tensor-compiler — frozen at `66ff2c6d02a22c621d01579b442af8b6fd43bcc5`; exact source/open-PR/CI state refreshed immediately before import and complete reachable-history attribution scan passed.
 
 A checked item here means a migration-ready **freeze point**, not merely that a repository looked healthy during an earlier audit.
 
@@ -44,7 +44,7 @@ Suggested import order:
 1. [x] `mini-elf-toolchain` — **IMPORTED / VERIFIED**
 2. [x] `mini-libc` — **IMPORTED / VERIFIED**
 3. [x] `mini-debugger` — **IMPORTED / VERIFIED**
-4. [ ] `tiny-tensor-compiler`
+4. [x] `tiny-tensor-compiler` — **IMPORTED / VERIFIED**
 5. [ ] `mini-wasm-runtime`
 6. [ ] `mini-language-server`
 7. [ ] `Nova`
@@ -63,7 +63,7 @@ For each remaining import:
 - [ ] run project tests/build/checks from the umbrella layout;
 - [ ] record verification evidence in `docs/MIGRATION.md`.
 
-Three imports now satisfy the reference process: `mini-elf-toolchain`, `mini-libc`, and `mini-debugger` retain their frozen source commits in umbrella ancestry, match their source trees, pass project-native gates in the umbrella layout, and have permanent integration-aware CI.
+Four imports now satisfy the reference process: `mini-elf-toolchain`, `mini-libc`, `mini-debugger`, and `tiny-tensor-compiler` retain their frozen source commits in umbrella ancestry, match their source trees, pass project-native gates in the umbrella layout, and have permanent path-scoped CI.
 
 ## Phase 3 — Umbrella integration
 
@@ -107,6 +107,8 @@ continue + breakpoint hit
 
 The second chain deliberately does not claim symbol-level interoperability yet. Current mini-ELF executables have no section-header table or `.symtab`; symbol-level debugging becomes valid only after the linker emits suitable metadata or an explicit metadata handoff is designed.
 
+`tiny-tensor-compiler` is now imported and continuously verified, but it does not yet participate in a fabricated toolchain edge. Its native backend emits C11 and builds host-toolchain shared libraries loaded through `ctypes`, while `mini-elf-toolchain` currently provides a static-object/archive-to-ET_EXEC path. A future cross-project milestone must deliberately define an object/static-runtime handoff or another executable artifact contract before claiming direct interoperability.
+
 Remaining planned relationships include:
 
 ```text
@@ -114,7 +116,7 @@ Nova → mini-language-server
 
 mini-wasm-runtime → conformance/differential reference tooling
 
-tiny-tensor-compiler → native generated code/toolchain boundary
+tiny-tensor-compiler → explicit object/static-runtime or executable-artifact handoff
 ```
 
 ## Phase 4 — Portfolio consolidation
