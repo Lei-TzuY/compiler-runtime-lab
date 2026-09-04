@@ -1,0 +1,131 @@
+name: One-shot history import — tiny-tensor-compiler
+
+on:
+  push:
+    branches: [chore/import-tiny-tensor-compiler]
+    paths:
+      - '.github/workflows/import-tiny-tensor-compiler.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: compiler-runtime-lab-history-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: Lei-TzuY/tiny-tensor-compiler
+      SOURCE_SHA: 66ff2c6d02a22c621d01579b442af8b6fd43bcc5
+      SOURCE_CI_RUN_ID: '33928929309'
+      SOURCE_REMOTE: source-tiny-tensor
+      TARGET_PATH: projects/tiny-tensor-compiler
+      EXPECTED_UMBRELLA_MAIN: cef15ded5ffe78bba7fdd8ffe9d4f2d43b6e576a
+    steps:
+      - name: Checkout exact migration branch trigger
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Verify exact trigger and umbrella prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_REF_NAME" = 'chore/import-tiny-tensor-compiler'
+          test -z "$(git status --porcelain)"
+          test ! -e "$TARGET_PATH"
+          git fetch origin main --prune
+          test "$(git rev-parse origin/main)" = "$EXPECTED_UMBRELLA_MAIN"
+
+      - name: Fetch and freeze exact source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add "$SOURCE_REMOTE" "https://github.com/$SOURCE_REPO.git"
+          git fetch "$SOURCE_REMOTE" main --tags --prune
+          LIVE_SOURCE_SHA="$(git rev-parse "$SOURCE_REMOTE/main")"
+          echo "Externally verified source CI run: $SOURCE_CI_RUN_ID"
+          echo "Live source: $LIVE_SOURCE_SHA"
+          test "$LIVE_SOURCE_SHA" = "$SOURCE_SHA"
+
+      - name: Audit complete reachable source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git log "$SOURCE_REMOTE/main" --format='%H%x09%an%x09%ae%x09%B' > /tmp/source-history.txt
+          if grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai' /tmp/source-history.txt > /tmp/attribution-matches.txt; then
+            echo 'Attribution/history matches detected; refusing automatic import.'
+            cat /tmp/attribution-matches.txt
+            exit 1
+          fi
+          git cat-file -e "$SOURCE_SHA:README.md"
+          git cat-file -e "$SOURCE_SHA:pyproject.toml"
+          git cat-file -e "$SOURCE_SHA:docs"
+
+      - name: Import source history without squash
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'LeiZ'
+          git config user.email '52287354+Lei-TzuY@users.noreply.github.com'
+          git subtree add --prefix="$TARGET_PATH" "$SOURCE_REMOTE" main
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+
+      - name: Verify imported tree is blob-for-blob equivalent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-tree -r "$SOURCE_SHA" | sort > /tmp/source-tree.txt
+          git ls-tree -r HEAD -- "$TARGET_PATH" \
+            | sed "s#\t$TARGET_PATH/#\t#" \
+            | sort > /tmp/imported-tree.txt
+          diff -u /tmp/source-tree.txt /tmp/imported-tree.txt
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Run source-native lint and test gates from umbrella path
+        shell: bash
+        working-directory: projects/tiny-tensor-compiler
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          ruff check .
+          pytest
+
+      - name: Require clean tracked tree after validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Remove one-shot workflow while preserving source ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/import-tiny-tensor-compiler.yml
+          git commit -m 'chore: remove one-shot tiny-tensor import workflow'
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          test -z "$(git status --porcelain --untracked-files=no)"
+          if git log -2 --format='%B' | grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai'; then
+            echo 'Forbidden attribution trailer in umbrella import/cleanup commits.'
+            exit 1
+          fi
+
+      - name: Final source, main, and branch race check; publish migration branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch "$SOURCE_REMOTE" main --prune
+          test "$(git rev-parse "$SOURCE_REMOTE/main")" = "$SOURCE_SHA"
+          git fetch origin main "$GITHUB_REF_NAME" --prune
+          test "$(git rev-parse origin/main)" = "$EXPECTED_UMBRELLA_MAIN"
+          test "$(git rev-parse "origin/$GITHUB_REF_NAME")" = "$GITHUB_SHA"
+          git push origin HEAD:"$GITHUB_REF_NAME"
