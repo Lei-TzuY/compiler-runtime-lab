@@ -35,9 +35,12 @@
       "source_repository": "Lei-TzuY/mini-elf-toolchain",
       "target_path": "projects/mini-elf-toolchain",
       "observed_main_sha": "3d452a8681bbfb092cd41465dba6f6eb97dfd224",
-      "status": "ready-for-import-prep",
+      "status": "imported-verified",
       "blocker": null,
-      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+      "imported_source_sha": "3d452a8681bbfb092cd41465dba6f6eb97dfd224",
+      "verified_umbrella_sha": "baa897d1f5c972b8a1854b0202de67d7c4cd2597",
+      "verification_run_id": 33925540855,
+      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry and the imported tree was verified blob-for-blob."
     },
     {
       "name": "mini-language-server",
