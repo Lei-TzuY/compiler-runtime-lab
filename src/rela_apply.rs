@@ -3,6 +3,8 @@ use core::fmt;
 use crate::relocations::Elf64RelaTable;
 use crate::x86_64_relocations::{apply_relocation, RelocationApplyError};
 
+const R_X86_64_NONE: u32 = 0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelaTableApplyError {
     PlaceOverflow {
@@ -67,6 +69,10 @@ where
     let mut patched = section.to_vec();
 
     for (relocation_index, relocation) in table.relocations.iter().enumerate() {
+        if relocation.relocation_type == R_X86_64_NONE {
+            continue;
+        }
+
         let place = section_address.checked_add(relocation.offset).ok_or(
             RelaTableApplyError::PlaceOverflow {
                 relocation_index,
