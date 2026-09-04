@@ -14,7 +14,7 @@ This repository is intentionally being assembled with **history-preserving migra
 | [mini-elf-toolchain](projects/mini-elf-toolchain) | ELF/static-linking toolchain | **IMPORTED / VERIFIED** |
 | [mini-language-server](https://github.com/Lei-TzuY/mini-language-server) | Version-safe semantic/LSP tooling | READY FOR IMPORT PREP |
 | [mini-debugger](https://github.com/Lei-TzuY/mini-debugger) | ptrace-based debugger | READY FOR IMPORT PREP |
-| [mini-libc](https://github.com/Lei-TzuY/mini-libc) | Freestanding libc subset and bootstrap target | READY FOR IMPORT PREP |
+| [mini-libc](projects/mini-libc) | Freestanding libc subset and bootstrap target | **IMPORTED / VERIFIED** |
 | [mini-wasm-runtime](https://github.com/Lei-TzuY/mini-wasm-runtime) | WebAssembly parser, validator, runtime and conformance lab | READY FOR IMPORT PREP |
 | [tiny-tensor-compiler](https://github.com/Lei-TzuY/tiny-tensor-compiler) | Tensor IR, optimization and native compilation | READY FOR IMPORT PREP |
 
@@ -31,21 +31,39 @@ compiler-runtime-lab/
 │   └── verify-import.ps1
 └── projects/
     ├── mini-elf-toolchain/      # imported + verified
+    ├── mini-libc/               # imported + verified
     ├── Nova/                    # planned
     ├── tiny-c-compiler/         # attribution review
     ├── sic-xe-assembler/        # hold: active PR
     ├── mini-language-server/    # planned
     ├── mini-debugger/           # planned
-    ├── mini-libc/               # planned
     ├── mini-wasm-runtime/       # planned
     └── tiny-tensor-compiler/    # planned
 ```
 
 A planned project directory is created only by a verified history-preserving import. Do not replace this process with ZIP/download-and-copy commits.
 
-## First verified import
+## Verified imports and first integration chain
 
-`mini-elf-toolchain` is the reference migration. Source SHA `3d452a8681bbfb092cd41465dba6f6eb97dfd224` was imported without squashing into `projects/mini-elf-toolchain/`. The source commit remains reachable in umbrella history, the subtree was verified blob-for-blob against the frozen source tree, its native Rust formatter/Clippy/test gates passed from the umbrella path, and a permanent path-scoped umbrella workflow now protects future changes.
+`mini-elf-toolchain` is the reference migration. Source SHA `3d452a8681bbfb092cd41465dba6f6eb97dfd224` was imported without squashing into `projects/mini-elf-toolchain/`. The source commit remains reachable in umbrella history, the subtree was verified blob-for-blob against the frozen source tree, its native Rust formatter/Clippy/test gates passed from the umbrella path, and a permanent path-scoped umbrella workflow protects future changes.
+
+`mini-libc` followed the same history-preserving process from source SHA `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`. Its GCC and Clang runtime probes, host-libc-independence checks, pinned tiny-C bootstrap, and source-style three-repository bootstrap all passed before publication. The frozen source contains README/docs/Makefile but no top-level LICENSE file; that source state was preserved exactly rather than inventing licensing metadata.
+
+The umbrella now has its first real internal integration edge:
+
+```text
+pinned tiny-c-compiler
+        ↓
+projects/mini-libc
+        ↓
+projects/mini-elf-toolchain
+        ↓
+freestanding x86-64 executable
+        ↓
+execution + host-libc-independence inspection
+```
+
+Permanent `.github/workflows/mini-libc.yml` CI reruns this chain when either imported mini-libc or mini-ELF code changes. This is intentionally stronger than merely storing two unrelated subtrees beside each other: the umbrella actively checks that they still compose.
 
 See [docs/MIGRATION.md](docs/MIGRATION.md) for the full evidence ledger.
 
@@ -55,7 +73,7 @@ A project may enter this umbrella only when all applicable gates are satisfied:
 
 1. Re-check the exact source `main`, open PRs, recent commits, CI/checks, and default branch immediately before migration.
 2. Do not migrate a repository while an implementation PR is active on that repository.
-3. Preserve source commit history and project-local license/documentation; do not flatten history into a single copy commit.
+3. Preserve source commit history and all existing project-local license/documentation files; do not flatten history into a single copy commit or invent missing licensing metadata.
 4. Audit reachable commit messages for attribution trailers before import. Known attribution must not be silently imported or silently rewritten.
 5. Verify the imported project tree against the exact source commit selected for migration.
 6. Run the imported project's formatter/lint/tests/build/CI from its new path and keep equivalent umbrella CI afterward.
