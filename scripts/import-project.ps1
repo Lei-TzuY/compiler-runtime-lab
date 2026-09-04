@@ -37,9 +37,10 @@ if (git status --porcelain) {
 $manifestPath = Join-Path $repoRoot 'projects/manifest.json'
 if (-not (Test-Path $manifestPath)) { Fail 'projects/manifest.json is missing.' }
 $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-$entry = $manifest.projects | Where-Object { $_.name -eq $Project }
-if (-not $entry) { Fail "Unknown project '$Project'." }
-if (@($entry).Count -ne 1) { Fail "Manifest contains duplicate project name '$Project'." }
+$entries = @($manifest.projects | Where-Object { $_.name -eq $Project })
+if ($entries.Count -eq 0) { Fail "Unknown project '$Project'." }
+if ($entries.Count -ne 1) { Fail "Manifest contains duplicate project name '$Project'." }
+$entry = $entries[0]
 
 if ($entry.status -ne 'ready-for-import-prep') {
     Fail "Project '$Project' is not migration-ready (status: $($entry.status); blocker: $($entry.blocker))."
@@ -52,7 +53,8 @@ if (Test-Path $targetPath) {
 
 $sourceRepo = [string]$entry.source_repository
 $sourceUrl = "https://github.com/$sourceRepo.git"
-$remoteName = 'source-' + (($Project -replace '[^A-Za-z0-9._-]', '-') .ToLowerInvariant())
+$remoteSlug = ($Project -replace '[^A-Za-z0-9._-]', '-').ToLowerInvariant()
+$remoteName = 'source-' + $remoteSlug
 
 Write-Host "== compiler-runtime-lab migration preflight =="
 Write-Host "Project:      $Project"
@@ -63,6 +65,7 @@ Write-Host "Mode:         $($(if ($Execute) { 'EXECUTE' } else { 'DRY RUN' }))"
 
 # Refresh umbrella first. Do not silently merge/rebase local work.
 git fetch origin --prune
+if ($LASTEXITCODE -ne 0) { Fail 'git fetch origin failed.' }
 $localHead = (git rev-parse HEAD).Trim()
 $originMain = (git rev-parse origin/main).Trim()
 if ($localHead -ne $originMain) {
@@ -70,13 +73,16 @@ if ($localHead -ne $originMain) {
 }
 
 # Use a dedicated source remote and fetch exact source history.
-$existingRemote = git remote 2>$null | Where-Object { $_ -eq $remoteName }
-if ($existingRemote) {
+$existingRemote = @(git remote 2>$null | Where-Object { $_ -eq $remoteName })
+if ($existingRemote.Count -gt 0) {
     git remote set-url $remoteName $sourceUrl
 } else {
     git remote add $remoteName $sourceUrl
 }
+if ($LASTEXITCODE -ne 0) { Fail "Could not configure source remote '$remoteName'." }
+
 git fetch $remoteName --tags --prune
+if ($LASTEXITCODE -ne 0) { Fail "git fetch $remoteName failed." }
 
 $sourceHead = (git rev-parse "$remoteName/main").Trim()
 Write-Host "Live source:  $sourceHead"
@@ -88,8 +94,10 @@ if ($sourceHead -ne [string]$entry.observed_main_sha) {
 # Full reachable-history attribution scan. This is intentionally broad and
 # fails closed: matches must be reviewed, not silently rewritten.
 $patterns = 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai'
-$matches = git log "$remoteName/main" --format='%H%x09%an%x09%ae%x09%B%x00' | Select-String -Pattern $patterns -CaseSensitive:$false
-if ($matches) {
+$history = git log "$remoteName/main" --format='%H%x09%an%x09%ae%x09%B'
+if ($LASTEXITCODE -ne 0) { Fail 'Could not read source history.' }
+$matches = @($history | Select-String -Pattern $patterns -CaseSensitive:$false)
+if ($matches.Count -gt 0) {
     Write-Host ''
     Write-Host 'Attribution/history matches detected:' -ForegroundColor Yellow
     $matches | ForEach-Object { Write-Host $_.Line }
@@ -108,6 +116,7 @@ if (-not $Execute) {
 # This command preserves the source history by merging it into the umbrella.
 # Do NOT add --squash: the purpose of this umbrella is to retain evidence.
 git subtree add --prefix="$targetPath" $remoteName main
+if ($LASTEXITCODE -ne 0) { Fail 'git subtree import failed.' }
 
 Write-Host ''
 Write-Host "Imported $Project into $targetPath with source history preserved." -ForegroundColor Green
