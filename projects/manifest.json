@@ -92,10 +92,16 @@
       "name": "tiny-tensor-compiler",
       "source_repository": "Lei-TzuY/tiny-tensor-compiler",
       "target_path": "projects/tiny-tensor-compiler",
-      "observed_main_sha": "8ebab53570adcdea8c483e301f07aab05e679426",
-      "status": "ready-for-import-prep",
+      "observed_main_sha": "66ff2c6d02a22c621d01579b442af8b6fd43bcc5",
+      "status": "imported-verified",
       "blocker": null,
-      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+      "imported_source_sha": "66ff2c6d02a22c621d01579b442af8b6fd43bcc5",
+      "verified_migration_branch_sha": "53a48fb97ebb8ea9139a349f1a4948fe3c5faa94",
+      "source_ci_run_id": 33928929309,
+      "verification_run_id": 33929543578,
+      "repository_hygiene_notes": "Frozen source has README, CHANGELOG, docs, pyproject and project metadata but no top-level LICENSE file; migration preserves that source state rather than inventing licensing metadata.",
+      "integration_notes": "The current native backend emits and loads shared libraries through the host C toolchain, while mini-elf-toolchain is a static ET_EXEC linker. No fake direct integration is claimed yet; the future boundary is a deliberate object/static-runtime handoff or another executable artifact contract.",
+      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history remains umbrella ancestry, the subtree matched source blob-for-blob, and source-native ruff/pytest gates passed from the umbrella path."
     }
   ]
 }
