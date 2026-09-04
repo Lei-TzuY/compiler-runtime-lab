@@ -55,10 +55,15 @@
       "name": "mini-debugger",
       "source_repository": "Lei-TzuY/mini-debugger",
       "target_path": "projects/mini-debugger",
-      "observed_main_sha": "f35d4f70075cbd95230dd37592c5d5a1a90a40a2",
-      "status": "ready-for-import-prep",
+      "observed_main_sha": "0ed0d52d0d650e6e7b535bfe49804719cfae2c9a",
+      "status": "imported-verified",
       "blocker": null,
-      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+      "imported_source_sha": "0ed0d52d0d650e6e7b535bfe49804719cfae2c9a",
+      "verified_migration_branch_sha": "ae6f11bc676546a1e3ff178463f2284918f7e962",
+      "source_ci_run_id": 33928883989,
+      "verification_run_id": 33928967178,
+      "integration_notes": "Imported mini-elf-toolchain currently emits sectionless ET_EXEC images (e_shoff/e_shnum = 0), so umbrella integration intentionally validates address-level debugging rather than pretending symbol metadata exists: launch, read entry bytes, set a numeric software breakpoint at 0x400001, continue, and observe the breakpoint hit.",
+      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history remains umbrella ancestry and the imported subtree matched source blob-for-blob."
     },
     {
       "name": "mini-libc",
