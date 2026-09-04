@@ -1,0 +1,188 @@
+name: One-shot history import — mini-debugger
+
+on:
+  push:
+    branches: [chore/import-mini-debugger]
+    paths:
+      - '.github/workflows/import-mini-debugger.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: compiler-runtime-lab-history-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: Lei-TzuY/mini-debugger
+      SOURCE_SHA: 96519fb92d09531d0fada614b5f6503c22dd18c8
+      SOURCE_REMOTE: source-mini-debugger
+      TARGET_PATH: projects/mini-debugger
+      EXPECTED_UMBRELLA_MAIN: 75304cd25d1e2b0670e9bc9b2ea6fcecf3d607b1
+    steps:
+      - name: Checkout exact migration branch trigger
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Verify exact trigger and umbrella prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_REF_NAME" = 'chore/import-mini-debugger'
+          test -z "$(git status --porcelain)"
+          test ! -e "$TARGET_PATH"
+          test -d projects/mini-elf-toolchain
+          test -d projects/mini-libc
+          git fetch origin main --prune
+          test "$(git rev-parse origin/main)" = "$EXPECTED_UMBRELLA_MAIN"
+
+      - name: Fetch frozen source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add "$SOURCE_REMOTE" "https://github.com/$SOURCE_REPO.git"
+          git fetch "$SOURCE_REMOTE" main --tags --prune
+          LIVE_SOURCE_SHA="$(git rev-parse "$SOURCE_REMOTE/main")"
+          echo "Live source: $LIVE_SOURCE_SHA"
+          test "$LIVE_SOURCE_SHA" = "$SOURCE_SHA"
+
+      - name: Recheck source open PR and exact CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          OPEN_PRS="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$SOURCE_REPO/pulls?state=open&per_page=100")"
+          test "$(jq 'length' <<<"$OPEN_PRS")" -eq 0
+
+          RUNS="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$SOURCE_REPO/actions/runs?branch=main&per_page=20")"
+          MATCHING="$(jq --arg sha "$SOURCE_SHA" '[.workflow_runs[] | select(.head_sha == $sha)]' <<<"$RUNS")"
+          test "$(jq 'length' <<<"$MATCHING")" -gt 0
+          test "$(jq '[.[] | select(.status != "completed" or .conclusion != "success")] | length' <<<"$MATCHING")" -eq 0
+
+      - name: Audit complete reachable source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git log "$SOURCE_REMOTE/main" --format='%H%x09%an%x09%ae%x09%B' > /tmp/source-history.txt
+          if grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai' /tmp/source-history.txt > /tmp/attribution-matches.txt; then
+            echo 'Attribution/history matches detected; refusing automatic import.'
+            cat /tmp/attribution-matches.txt
+            exit 1
+          fi
+          git cat-file -e "$SOURCE_SHA:README.md"
+          git cat-file -e "$SOURCE_SHA:CMakeLists.txt"
+          git cat-file -e "$SOURCE_SHA:docs"
+
+      - name: Import source history without squash
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'LeiZ'
+          git config user.email '52287354+Lei-TzuY@users.noreply.github.com'
+          git subtree add --prefix="$TARGET_PATH" "$SOURCE_REMOTE" main
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+
+      - name: Verify imported tree is blob-for-blob equivalent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-tree -r "$SOURCE_SHA" | sort > /tmp/source-tree.txt
+          git ls-tree -r HEAD -- "$TARGET_PATH" \
+            | sed "s#\t$TARGET_PATH/#\t#" \
+            | sort > /tmp/imported-tree.txt
+          diff -u /tmp/source-tree.txt /tmp/imported-tree.txt
+
+      - name: Run mini-debugger native CI gates from umbrella path
+        shell: bash
+        run: |
+          set -euo pipefail
+          DBG_BUILD="$RUNNER_TEMP/mini-debugger-build"
+          cmake -S projects/mini-debugger -B "$DBG_BUILD" -DCMAKE_BUILD_TYPE=Debug
+          cmake --build "$DBG_BUILD" --parallel 2
+          ctest --test-dir "$DBG_BUILD" --output-on-failure
+
+      - name: Verify mini-ELF to mini-debugger integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/elf-debugger-smoke"
+          DBG_BUILD="$RUNNER_TEMP/mini-debugger-build"
+          ELF_TARGET="$RUNNER_TEMP/mini-elf-debugger-target"
+          mkdir -p "$WORK"
+
+          cat > "$WORK/probe.S" <<'EOF'
+          .text
+          .globl _start
+          .type _start,@function
+          _start:
+              nop
+          .globl probe
+          .type probe,@function
+          probe:
+              mov $60, %eax
+              xor %edi, %edi
+              syscall
+          .size probe, .-probe
+          .size _start, .-_start
+          EOF
+
+          cc -c -nostdlib -fno-pie -o "$WORK/probe.o" "$WORK/probe.S"
+          export CARGO_TARGET_DIR="$ELF_TARGET"
+          cargo build --manifest-path projects/mini-elf-toolchain/Cargo.toml --bin mini-elf-toolchain
+          "$ELF_TARGET/debug/mini-elf-toolchain" link -o "$WORK/probe" "$WORK/probe.o"
+          chmod +x "$WORK/probe"
+          readelf -h "$WORK/probe" | grep -q 'Class:.*ELF64'
+          readelf -s "$WORK/probe" | grep -Eq '[[:space:]]probe$'
+          "$WORK/probe"
+
+          printf 'symbols probe\nbreak probe\ncontinue\nquit\n' \
+            | "$DBG_BUILD/mdbg" "$WORK/probe" > "$WORK/mdbg.out" 2>&1
+          cat "$WORK/mdbg.out"
+          grep -q '^stopped after exec$' "$WORK/mdbg.out"
+          grep -Eq '0x[0-9a-f]+ probe$' "$WORK/mdbg.out"
+          grep -Eq 'Breakpoint 1 at 0x[0-9a-f]+ \(probe\)' "$WORK/mdbg.out"
+          grep -Eq 'breakpoint at 0x[0-9a-f]+ \(probe\)' "$WORK/mdbg.out"
+
+      - name: Clean generated umbrella artifacts and require clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATUS="$(git status --porcelain)"
+          if [[ -n "$STATUS" && "$STATUS" != '?? projects/mini-elf-toolchain/Cargo.lock' ]]; then
+            echo 'Unexpected files generated by migration validation:'
+            git status --short
+            exit 1
+          fi
+          rm -f projects/mini-elf-toolchain/Cargo.lock
+          test -z "$(git status --porcelain)"
+
+      - name: Remove one-shot workflow while preserving source ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/import-mini-debugger.yml
+          git commit -m 'chore: remove one-shot mini-debugger import workflow'
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          test -z "$(git status --porcelain)"
+          if git log -2 --format='%B' | grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai'; then
+            echo 'Forbidden attribution trailer in umbrella import/cleanup commits.'
+            exit 1
+          fi
+
+      - name: Final source, main, and branch race check; publish migration branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch "$SOURCE_REMOTE" main --prune
+          test "$(git rev-parse "$SOURCE_REMOTE/main")" = "$SOURCE_SHA"
+          OPEN_PRS="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$SOURCE_REPO/pulls?state=open&per_page=100")"
+          test "$(jq 'length' <<<"$OPEN_PRS")" -eq 0
+          git fetch origin main "$GITHUB_REF_NAME" --prune
+          test "$(git rev-parse origin/main)" = "$EXPECTED_UMBRELLA_MAIN"
+          test "$(git rev-parse "origin/$GITHUB_REF_NAME")" = "$GITHUB_SHA"
+          git push origin HEAD:"$GITHUB_REF_NAME"
