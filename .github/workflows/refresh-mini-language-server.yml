@@ -26,8 +26,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "$UMBRELLA_BASE"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$UMBRELLA_BASE"
+          git merge-base --is-ancestor "$UMBRELLA_BASE" HEAD
+          unexpected="$(git diff --name-only "$UMBRELLA_BASE..HEAD" | grep -vx '.github/workflows/refresh-mini-language-server.yml' || true)"
+          if [ -n "$unexpected" ]; then
+            printf '%s\n' "$unexpected"
+            echo "Refresh branch contains non-harness changes before guarded refresh" >&2
+            exit 1
+          fi
           git remote add lsp-source https://github.com/Lei-TzuY/mini-language-server.git
           git fetch lsp-source --tags
           test "$(git rev-parse lsp-source/main)" = "$NEW_SOURCE_SHA"
@@ -62,6 +68,8 @@ jobs:
 
       - name: Run source-equivalent gates from umbrella path
         shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
@@ -69,9 +77,13 @@ jobs:
           (
             cd projects/mini-language-server
             python -m ruff check .
-            python -m pytest
+            python -m pytest -p no:cacheprovider
           )
-          test -z "$(git status --short)"
+          echo "Post-test generated state:"
+          git status --short --untracked-files=all -- projects/mini-language-server || true
+          git diff --exit-code -- projects/mini-language-server
+          git clean -fdx projects/mini-language-server
+          test -z "$(git status --short --untracked-files=all -- projects/mini-language-server)"
 
       - name: Final race check and publish
         shell: bash
