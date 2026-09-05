@@ -11,17 +11,17 @@ This document is the durable migration ledger for `compiler-runtime-lab`.
 
 ## Current preflight / migration state — 2026-09-05 (Asia/Taipei)
 
-| Project | Observed source `main` | Open implementation PR at last freeze/recheck | Evidence | Status |
-| --- | --- | --- | --- | --- |
-| Nova | `dcadc2238737b6f1e98887ab8fa658b23413d31b` | none | source CI `33920772855`; one-shot `33967555408`; full history/tree/stable/MSRV gates passed | **IMPORTED / VERIFIED — pending umbrella PR merge** |
-| tiny-c-compiler | `5607c3152d319353c42f05ed44ff53479272a74f` | none at first pass | reachable commits include `Co-authored-by: github-actions[bot]` | ATTRIBUTION REVIEW |
-| sic-xe-assembler | `a58f4b5c7f34675fddf437d4af596cd81b5d891f` | #30 observed during first pass | must recheck before import | **HOLD / RECHECK** |
-| mini-elf-toolchain | `3d452a8681bbfb092cd41465dba6f6eb97dfd224` | none | complete reachable-history import scan + native Rust gates | **IMPORTED / VERIFIED** |
-| mini-language-server | `fe4a941f11e538fcafc9255362926b0ee17cf3d4` | none at latest read-only preflight | source CI `33964865348`; full reachable-history scan still required at freeze | READY FOR IMPORT PREP |
-| mini-debugger | `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` | none | source CI `33928883989`; one-shot `33928967178` | **IMPORTED / VERIFIED** |
-| mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | none | one-shot `33927869512`; permanent umbrella CI `33927981587` | **IMPORTED / VERIFIED** |
-| mini-wasm-runtime | `e923b27a2652aba88d50cdbb75d0fe959d40e457` | none | one-shot `33966895454`; post-merge 7-job CI `33967377142` | **IMPORTED / VERIFIED** |
-| tiny-tensor-compiler | `4690df5747a1e7fc0af9b602f8be8d963e72d00f` | none at refresh freeze | refresh one-shot `33966522648`; post-merge four-way CI `33966708522` | **IMPORTED / VERIFIED** |
+| Project | Frozen / observed source `main` | Evidence | Status |
+| --- | --- | --- | --- |
+| Nova | `dcadc2238737b6f1e98887ab8fa658b23413d31b` | source CI `33920772855`; one-shot `33967555408`; PR 5/5; merged `7be12c6d...`; post-merge `33968264098` 5/5 | **IMPORTED / VERIFIED** |
+| tiny-c-compiler | `5607c3152d319353c42f05ed44ff53479272a74f` | reachable history includes `Co-authored-by: github-actions[bot]` | ATTRIBUTION REVIEW |
+| sic-xe-assembler | `a58f4b5c7f34675fddf437d4af596cd81b5d891f` | #30 observed during first pass; recheck before import | **HOLD / RECHECK** |
+| mini-elf-toolchain | `3d452a8681bbfb092cd41465dba6f6eb97dfd224` | complete history/tree/native Rust verification | **IMPORTED / VERIFIED** |
+| mini-language-server | `f8a4d642eaa721741ab3cea7eb02d2f261dbad01` | source CI `33967371120`; one-shot `33968415924`; six-way umbrella CI staged | **IMPORTED / VERIFIED CANDIDATE** |
+| mini-debugger | `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` | source CI `33928883989`; one-shot `33928967178`; post-merge integration green | **IMPORTED / VERIFIED** |
+| mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | one-shot `33927869512`; permanent umbrella CI `33927981587` | **IMPORTED / VERIFIED** |
+| mini-wasm-runtime | `e923b27a2652aba88d50cdbb75d0fe959d40e457` | one-shot `33966895454`; post-merge seven-job CI `33967377142` | **IMPORTED / VERIFIED** |
+| tiny-tensor-compiler | `4690df5747a1e7fc0af9b602f8be8d963e72d00f` | refresh one-shot `33966522648`; post-merge four-way CI `33966708522` | **IMPORTED / VERIFIED** |
 
 ### Attribution-scan rule
 
@@ -38,175 +38,144 @@ Matches are inspected rather than deleted blindly. Genuine authorship is not fal
 
 Immediately before importing a project:
 
-1. `git fetch --all --prune`.
-2. Record exact source repository URL and exact `main` SHA.
-3. Confirm no active implementation PR for that repository.
-4. Confirm required source CI/checks are completed and successful for the exact candidate.
-5. Run the complete reachable-history attribution scan.
-6. Preserve README/docs and every existing project-local license file; document license-file absence instead of inventing metadata.
-7. Check for generated binaries, huge artifacts, secrets, local caches, vendored dependency accidents and temporary migration machinery.
-8. Freeze the source SHA before the import.
+1. Fetch/prune and record the exact source `main` SHA.
+2. Confirm no active implementation PR.
+3. Confirm required source CI/checks are successful for the exact source candidate.
+4. Run the complete reachable-history attribution scan.
+5. Preserve README/docs and existing project-local licenses; document license-file absence instead of inventing metadata.
+6. Check for generated artifacts, caches, secrets and migration-only files.
+7. Freeze the umbrella base and source SHA before import.
 
 ## History-preserving import procedure
 
-Use a real Git client. Do **not** download ZIPs or copy only the current tree.
+Use a real Git client and a non-squashed subtree import. Do not download ZIPs or flatten the source into one copy commit.
 
 ```bash
-git clone https://github.com/Lei-TzuY/compiler-runtime-lab.git
-cd compiler-runtime-lab
-
 git remote add source-project https://github.com/Lei-TzuY/<project>.git
 git fetch source-project --tags
-
-git subtree add \
-  --prefix=projects/<project> \
-  source-project main
+git subtree add --prefix=projects/<project> source-project main
 ```
 
-Do not use `--squash` when the purpose is to preserve source history. `git filter-repo --to-subdirectory-filter projects/<project>` in a temporary clone is an alternative only when an explicitly documented history transformation is required.
+For every migration candidate:
 
-## Verification after each import
-
-For selected source commit `SOURCE_SHA` and migration candidate `UMBRELLA_SHA`:
-
-1. Require `SOURCE_SHA` to remain reachable in umbrella ancestry.
-2. Export/hash or enumerate the source tree and imported subtree independently.
-3. Require project-file content equivalence after applying only the intentional subtree prefix.
-4. Run the project's native formatter/lint/tests/build/checks from `projects/<project>`.
-5. Remove only explicitly recognized build-generated files that were absent from the frozen source tree; fail on unexpected dirty paths.
-6. Ensure one-shot migration workflows/scripts do not leak into the published result.
-7. Perform a final source-head / umbrella-main race check before publication.
-8. Merge migration PRs with a normal merge commit, never squash/rebase, so source ancestry remains reachable.
-9. Re-run permanent path-scoped CI on the exact merged umbrella `main`.
+- require the frozen source SHA to remain an umbrella ancestor;
+- require source-root tree and imported subtree equivalence at the freeze point;
+- run source-equivalent native gates from `projects/<project>`;
+- remove one-shot migration machinery before publication;
+- perform final source-head / umbrella-main race checks;
+- merge the migration PR with a normal merge commit, never squash/rebase;
+- rerun permanent path-scoped CI on exact merged umbrella `main`.
 
 ## Verified imports
 
 ### mini-elf-toolchain — VERIFIED 2026-09-05
 
-- Source: `Lei-TzuY/mini-elf-toolchain`
-- Frozen source SHA: `3d452a8681bbfb092cd41465dba6f6eb97dfd224`
-- First published verified umbrella main: `baa897d1f5c972b8a1854b0202de67d7c4cd2597`
-- Target: `projects/mini-elf-toolchain/`
-- Successful one-shot run: `33925540855`
-- Complete reachable source-history attribution scan: PASS
-- Non-squashed source ancestry: PASS
-- Blob-for-blob tree equivalence: PASS
-- `cargo fmt`, Clippy `-D warnings`, all-target/all-feature tests: PASS
-- Source lacked `Cargo.lock`; the generated lockfile was recognized and removed before publication.
-- One-shot workflow cleanup and final race check: PASS
+- Source SHA: `3d452a8681bbfb092cd41465dba6f6eb97dfd224`
+- One-shot run: `33925540855`
+- First verified umbrella main: `baa897d1f5c972b8a1854b0202de67d7c4cd2597`
+- Complete reachable-history attribution, non-squashed ancestry, blob equivalence, rustfmt, Clippy `-D warnings` and tests: PASS.
 
 ### mini-libc — VERIFIED 2026-09-05
 
-- Source: `Lei-TzuY/mini-libc`
-- Frozen source SHA: `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`
-- First published verified umbrella main: `26cd23866580026bc9d72644da3fda9e25d18828`
-- Target: `projects/mini-libc/`
-- Successful one-shot run: `33927869512`
-- Exact source CI at freeze: `33842616621`, success
-- Complete reachable-history attribution scan / non-squashed ancestry / blob equivalence: PASS
-- GCC and Clang `make clean test` + `make inspect`: PASS
-- Pinned `tiny-c-compiler` bootstrap and source-style three-repo bootstrap with mini-ELF: PASS
-- Permanent umbrella CI `33927981587`: PASS
-- Frozen source has no top-level LICENSE; that absence was preserved.
+- Source SHA: `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`
+- Source CI: `33842616621`
+- One-shot run: `33927869512`
+- First verified umbrella main: `26cd23866580026bc9d72644da3fda9e25d18828`
+- Permanent umbrella CI: `33927981587`
+- GCC/Clang runtime probes, host-libc independence, pinned tiny-C bootstrap and source-style mini-ELF bootstrap: PASS.
+- Source has no top-level LICENSE; that absence is preserved.
 
 ### mini-debugger — VERIFIED 2026-09-05
 
-- Source: `Lei-TzuY/mini-debugger`
-- Frozen source SHA: `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a`
-- Exact source CI: `33928883989`, success
-- First verified migration-branch commit: `ae6f11bc676546a1e3ff178463f2284918f7e962`
-- Successful one-shot run: `33928967178`
-- Complete reachable-history attribution / ancestry / blob equivalence / native CMake + CTest: PASS
-- Post-merge umbrella run `33929397068`: native PASS; mini-ELF integration PASS
+- Source SHA: `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a`
+- Source CI: `33928883989`
+- One-shot run: `33928967178`
+- First verified migration branch: `ae6f11bc676546a1e3ff178463f2284918f7e962`
+- Post-merge umbrella run: `33929397068`
+- Native CMake/CTest and the imported mini-ELF address-level integration: PASS.
 
-The integration intentionally validates the current address-level boundary:
-
-```text
-projects/mini-elf-toolchain
-        ↓
-sectionless ELF64 ET_EXEC, entry 0x400000
-        ↓
-projects/mini-debugger
-        ↓
-launch + memory read + numeric breakpoint at 0x400001
-        ↓
-continue + breakpoint hit
-```
-
-Current mini-ELF output has no section-header table / `.symtab`, so symbol-level interoperability remains a future capability.
+The chain is intentionally bounded to sectionless ET_EXEC launch, memory read and numeric breakpoint behavior; `.symtab` interoperability is not claimed.
 
 ### tiny-tensor-compiler — VERIFIED / REFRESHED 2026-09-05
 
-- Source: `Lei-TzuY/tiny-tensor-compiler`
-- Initial frozen SHA: `66ff2c6d02a22c621d01579b442af8b6fd43bcc5`
+- Initial source SHA: `66ff2c6d02a22c621d01579b442af8b6fd43bcc5`
 - Refreshed source SHA: `4690df5747a1e7fc0af9b602f8be8d963e72d00f`
-- Initial migration branch: `53a48fb97ebb8ea9139a349f1a4948fe3c5faa94`
-- Initial one-shot run: `33929543578`
-- Refresh one-shot run: `33966522648`
+- Initial one-shot: `33929543578`
+- Refresh one-shot: `33966522648`
 - Merged umbrella SHA: `ae03589a39a36d2df8e8220d933471722708cedc`
-- Post-merge Ubuntu/Windows × Python 3.11/3.13 run: `33966708522`, four jobs PASS
-- The 26 newly reachable source commits were separately attribution-scanned before the non-squashed refresh.
-- Source ancestry and blob-for-blob equivalence remained intact.
-- `ruff` and `pytest` passed from the umbrella path.
+- Post-merge Ubuntu/Windows × Python 3.11/3.13: `33966708522`, PASS.
+- The 26 newly reachable commits were separately attribution-scanned before the non-squashed refresh.
 - Source has no top-level LICENSE; that state is preserved.
 
-No direct mini-ELF integration is claimed. The native backend currently emits C11, uses the host toolchain to build a shared library, and loads it through `ctypes`; mini-ELF currently links static object/archive input into `ET_EXEC`.
+No direct mini-ELF integration is claimed because the current backend produces host-toolchain shared libraries rather than mini-ELF's static ET_EXEC input contract.
 
 ### mini-wasm-runtime — VERIFIED 2026-09-05
 
-- Source: `Lei-TzuY/mini-wasm-runtime`
-- Frozen source SHA: `e923b27a2652aba88d50cdbb75d0fe959d40e457`
-- Source core CI: `33892678967`, stable Ubuntu/Windows/macOS + Rust 1.81 Ubuntu PASS
-- Source benchmark smoke: `33892678903`, PASS
-- Source differential reference: `33892679049`, PASS
-- Successful one-shot run: `33966895454`
+- Source SHA: `e923b27a2652aba88d50cdbb75d0fe959d40e457`
+- Source core CI: `33892678967`
+- Source benchmark: `33892678903`
+- Source Wasmtime differential: `33892679049`
+- One-shot run: `33966895454`
 - Merged umbrella SHA: `e7b1df4734d6c5b4b04c2e6a99de424932c2079f`
-- Post-merge permanent 7-job CI: `33967377142`, PASS
-- Complete reachable-history attribution scan / non-squashed ancestry / blob-for-blob equivalence: PASS
-- Stable and Rust 1.81 formatter/Clippy/tests/docs: PASS
-- Wasmtime differential reference: PASS
-- Deterministic benchmark-policy smoke: PASS
-- Deterministic parser + parse/validation fuzz smoke, reviewed corpus replay and coverage rendering: PASS
-- The source 15-minute coverage-guided fuzz campaign remains scheduled/manual and is not misrepresented as a per-PR gate.
-- Source top-level LICENSE is preserved.
+- Post-merge permanent seven-job CI: `33967377142`, PASS.
+- Stable + Rust 1.81 core gates, Wasmtime differential, deterministic benchmark and deterministic parser/validation fuzz smoke: PASS.
+- Source 15-minute coverage-guided fuzzing remains scheduled/manual and is not misrepresented as a PR gate.
+- Source LICENSE is preserved.
 
-### Nova — VERIFIED MIGRATION CANDIDATE 2026-09-05
+### Nova — VERIFIED 2026-09-05
 
-- Source: `Lei-TzuY/Nova`
-- Frozen source SHA: `dcadc2238737b6f1e98887ab8fa658b23413d31b`
-- Exact source CI: `33920772855`, PASS
-- Source open implementation PRs at freeze/recheck: `0`
-- Successful one-shot run: `33967555408`
-- First published verified migration-branch commit after one-shot cleanup: `e725af64a9f05fd37acb51b969b01f635c20c37b`
-- Target: `projects/Nova/`
-- Complete reachable source-history attribution scan: PASS
-- Non-squashed source ancestry: PASS
-- Blob-for-blob source-tree vs imported-subtree comparison: PASS
-- Stable `cargo fmt --all -- --check`: PASS
-- Stable `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`: PASS
-- Stable workspace tests, all-target build and rustdoc with warnings denied: PASS
-- Rust 1.85 MSRV workspace/all-target check: PASS
-- Clean tracked tree, one-shot self-removal and final source/main/branch race check: PASS
-- Frozen source has README/docs/examples, `Cargo.lock`, and toolchain metadata but no top-level LICENSE; that state is preserved exactly.
-- Permanent `.github/workflows/nova.yml` mirrors Nova's source rustfmt, Clippy, MSRV, tests, build and docs gates from the umbrella path.
+- Source SHA: `dcadc2238737b6f1e98887ab8fa658b23413d31b`
+- Source CI: `33920772855`
+- One-shot run: `33967555408`
+- First verified cleaned migration commit: `e725af64a9f05fd37acb51b969b01f635c20c37b`
+- PR-head permanent CI: `33968190636`, five jobs PASS.
+- Merged umbrella SHA: `7be12c6d2dc8cc10dbf386213064a1b809b7aea3`
+- Post-merge permanent CI: `33968264098`, five jobs PASS.
+- Full history scan, non-squashed ancestry, blob equivalence, rustfmt, Clippy, tests, build/rustdoc and Rust 1.85 MSRV: PASS.
+- Source has no top-level LICENSE; that state is preserved.
 
-Nova is not yet claimed as integrated with `mini-language-server`. That project must first complete its own history-preserving import. The subsequent integration should test the bounded Nova syntax/semantic/diagnostic surface that the existing language-server adapter actually supports, not claim a complete production Nova LSP.
+### mini-language-server — VERIFIED MIGRATION CANDIDATE 2026-09-05
+
+- Source SHA: `f8a4d642eaa721741ab3cea7eb02d2f261dbad01`
+- Exact source CI: `33967371120`, Ubuntu/Windows/macOS × Python 3.11/3.13 PASS.
+- Source open implementation PRs at freeze: `0`.
+- One-shot run: `33968415924`, PASS.
+- First cleaned migration-branch commit: `27c6d64d32308ec7edb7d806e0ff7fe5989e2ba7`.
+- Complete reachable-history attribution scan: PASS.
+- Non-squashed source ancestry: PASS.
+- Blob-for-blob source tree vs imported subtree: PASS.
+- Python 3.13 editable install, `ruff check .` and `pytest`: PASS.
+- Clean tree, one-shot self-removal and final source/main race check: PASS.
+- Frozen source has README/docs/pyproject/src/tests but no top-level LICENSE; that state is preserved.
+- Permanent `.github/workflows/mini-language-server.yml` mirrors the source six-way OS/Python matrix.
+
+#### Discovered Nova integration gap
+
+The frozen language-server source genuinely contains `NovaFunctionAdapter`, local/parameter/reference semantics and deterministic `nova.unresolved-name` diagnostics. However, imported Nova's normative grammar requires typed parameters and an explicit return type:
+
+```text
+fn name(parameter: Type) -> ReturnType { ... }
+```
+
+The frozen adapter's function-declaration pattern currently recognizes only `fn name(params) { ... }`, and its parameter parser only treats bare identifiers as parameters. Therefore the umbrella does **not** claim that legal Nova programs currently flow through the adapter. The first post-migration integration slice is to close this exact grammar mismatch and prove shared-input function/local/reference/unresolved-name behavior without weakening snapshot/stale-result semantics.
 
 ## Seven-project checkpoint plan
 
-The checkpoint is reached after `mini-language-server` becomes the seventh imported/verified project and the Nova ↔ language-server bounded semantic/diagnostic integration is green. At that point:
+The migration side of the seven-project checkpoint is complete once mini-language-server PR-head and exact-main six-way CI are green. The architectural checkpoint additionally requires the bounded Nova grammar/semantic integration slice above.
 
-- verify zero open migration PRs;
-- verify all path-scoped workflows on exact umbrella `main`;
+After both are complete:
+
+- verify zero open migration/integration PRs;
+- verify applicable path-scoped workflows on exact umbrella `main`;
 - freeze README/manifest/ledger evidence;
-- keep `tiny-c-compiler` and `sic-xe-assembler` as explicit exceptions if their blockers remain;
-- begin the separate `systems-lab` consolidation rather than extending this migration indefinitely.
+- retain `tiny-c-compiler` and `sic-xe-assembler` as explicit exceptions if their blockers remain;
+- begin the separate `systems-lab` consolidation.
 
 ## Source repository retirement policy
 
 After a project reaches **IMPORTED / VERIFIED**:
 
 - keep the original repository available while external links, issues, PRs and releases still matter;
-- add a prominent canonical-path notice only after the umbrella import and ongoing CI strategy are stable;
+- add a canonical-path notice only after umbrella import and ongoing CI are stable;
 - archive only after the umbrella version is stable and the redirect is clear;
-- do not delete the original repository as part of routine portfolio consolidation.
+- do not delete the original repository as routine portfolio consolidation.
