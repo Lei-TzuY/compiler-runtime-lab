@@ -4,7 +4,15 @@ from collections import Counter
 
 import numpy as np
 
-from .inference import TypeInferenceError, infer_binary, infer_relu
+from .inference import (
+    TypeInferenceError,
+    infer_binary,
+    infer_relu,
+    infer_reshape,
+    infer_reverse,
+    infer_slice,
+    infer_transpose,
+)
 from .ir import DType, Module, Operation, TensorType, Value
 
 
@@ -12,11 +20,17 @@ class VerificationError(ValueError):
     pass
 
 
+_ALIAS_OPCODES = frozenset({"view", "slice", "reverse", "transpose"})
+
+
 def verify(module: Module) -> None:
     function = module.function
     seen: set[Value] = set()
     all_results: list[Value] = []
     expected_uses: Counter[tuple[Value, Operation, int]] = Counter()
+    storage_roots: dict[Value, Value] = {}
+    root_generations: dict[Value, int] = {}
+    value_generations: dict[Value, int] = {}
     returns = 0
     next_input_index = 0
 
@@ -26,6 +40,14 @@ def verify(module: Module) -> None:
         for operand_index, operand in enumerate(op.operands):
             if operand not in seen:
                 _fail(op_index, op, f"operand {operand_index} is not defined before use")
+            _verify_fresh_tensor_value(
+                op_index,
+                op,
+                operand,
+                storage_roots,
+                root_generations,
+                value_generations,
+            )
             expected_uses[(operand, op, operand_index)] += 1
         for result_index, result in enumerate(op.results):
             if result.producer is not op or result.result_index != result_index:
@@ -44,6 +66,16 @@ def verify(module: Module) -> None:
             _verify_binary(op_index, op)
         elif op.opcode == "relu":
             _verify_relu(op_index, op)
+        elif op.opcode in {"reshape", "view"}:
+            _verify_shape_transform(op_index, op)
+        elif op.opcode == "slice":
+            _verify_slice(op_index, op)
+        elif op.opcode == "reverse":
+            _verify_reverse(op_index, op)
+        elif op.opcode == "transpose":
+            _verify_transpose(op_index, op)
+        elif op.opcode == "copy_into":
+            _verify_copy_into(op_index, op)
         elif op.opcode == "return":
             returns += 1
             _verify_return(op_index, op)
@@ -51,6 +83,13 @@ def verify(module: Module) -> None:
                 _fail(op_index, op, "return must be the final operation")
         else:
             _fail(op_index, op, f"unknown opcode {op.opcode!r}")
+
+        _record_storage_generation(
+            op,
+            storage_roots,
+            root_generations,
+            value_generations,
+        )
 
     if returns != 1:
         raise VerificationError(
@@ -131,6 +170,93 @@ def _verify_relu(op_index: int, op: Operation) -> None:
         )
 
 
+def _verify_shape_transform(op_index: int, op: Operation) -> None:
+    _expect_arity(op_index, op, operands=1, results=1)
+    if op.attrs:
+        _fail(op_index, op, f"{op.opcode} does not accept attributes")
+    try:
+        expected_type = infer_reshape(op.operands[0].type, op.results[0].type.shape)
+    except TypeInferenceError as exc:
+        _fail(op_index, op, str(exc))
+    if op.results[0].type != expected_type:
+        _fail(
+            op_index,
+            op,
+            f"{op.opcode} result type {op.results[0].type} does not match inferred type {expected_type}",
+        )
+
+
+def _verify_slice(op_index: int, op: Operation) -> None:
+    _expect_arity(op_index, op, operands=1, results=1)
+    if set(op.attrs) != {"axis", "start", "stop", "step"}:
+        _fail(op_index, op, "slice requires axis/start/stop/step attributes")
+    try:
+        expected_type = infer_slice(op.operands[0].type, **op.attrs)
+    except (TypeError, TypeInferenceError) as exc:
+        _fail(op_index, op, str(exc))
+    if op.results[0].type != expected_type:
+        _fail(
+            op_index,
+            op,
+            f"slice result type {op.results[0].type} does not match inferred type {expected_type}",
+        )
+
+
+def _verify_reverse(op_index: int, op: Operation) -> None:
+    _expect_arity(op_index, op, operands=1, results=1)
+    if set(op.attrs) != {"axis"}:
+        _fail(op_index, op, "reverse requires exactly one 'axis' attribute")
+    try:
+        expected_type = infer_reverse(op.operands[0].type, op.attrs["axis"])
+    except TypeInferenceError as exc:
+        _fail(op_index, op, str(exc))
+    if op.results[0].type != expected_type:
+        _fail(
+            op_index,
+            op,
+            f"reverse result type {op.results[0].type} does not match inferred type {expected_type}",
+        )
+
+
+def _verify_transpose(op_index: int, op: Operation) -> None:
+    _expect_arity(op_index, op, operands=1, results=1)
+    if set(op.attrs) != {"axes"}:
+        _fail(op_index, op, "transpose requires exactly one 'axes' attribute")
+    try:
+        expected_type = infer_transpose(op.operands[0].type, op.attrs["axes"])
+    except (TypeError, TypeInferenceError) as exc:
+        _fail(op_index, op, str(exc))
+    if op.results[0].type != expected_type:
+        _fail(
+            op_index,
+            op,
+            f"transpose result type {op.results[0].type} does not match inferred type {expected_type}",
+        )
+
+
+def _verify_copy_into(op_index: int, op: Operation) -> None:
+    _expect_arity(op_index, op, operands=3, results=1)
+    if op.attrs:
+        _fail(op_index, op, "copy_into does not accept attributes")
+
+    root, target, source = op.operands
+    result = op.results[0]
+    owner = _storage_root(root)
+    if result.type != root.type:
+        _fail(op_index, op, "copy_into result type must match the current root handle type")
+    if target.type != source.type:
+        _fail(op_index, op, "copy_into target and source types must exactly match")
+    if not _is_full_root_handle(root):
+        _fail(op_index, op, "copy_into root must be an owning value or fresh full-root result")
+    producer = owner.producer
+    if producer is None or producer.opcode in {"input", "const"}:
+        _fail(op_index, op, "copy_into root must use internal computed storage")
+    if _storage_root(target) is not owner:
+        _fail(op_index, op, "copy_into target must alias its owning root storage")
+    if _storage_root(source) is owner:
+        _fail(op_index, op, "copy_into source must use a different storage root")
+
+
 def _verify_return(op_index: int, op: Operation) -> None:
     if op.results:
         _fail(op_index, op, "return must not produce results")
@@ -138,6 +264,84 @@ def _verify_return(op_index: int, op: Operation) -> None:
         _fail(op_index, op, "return requires at least one operand")
     if op.attrs:
         _fail(op_index, op, "return does not accept attributes")
+
+
+def _record_storage_generation(
+    op: Operation,
+    storage_roots: dict[Value, Value],
+    root_generations: dict[Value, int],
+    value_generations: dict[Value, int],
+) -> None:
+    if not op.results:
+        return
+    result = op.results[0]
+    if op.opcode in _ALIAS_OPCODES:
+        source = op.operands[0]
+        root = storage_roots[source]
+        storage_roots[result] = root
+        value_generations[result] = value_generations[source]
+        return
+    if op.opcode == "copy_into":
+        root = storage_roots[op.operands[0]]
+        root_generations[root] += 1
+        storage_roots[result] = root
+        value_generations[result] = root_generations[root]
+        return
+
+    storage_roots[result] = result
+    root_generations[result] = 0
+    value_generations[result] = 0
+
+
+def _verify_fresh_tensor_value(
+    op_index: int,
+    op: Operation,
+    value: Value,
+    storage_roots: dict[Value, Value],
+    root_generations: dict[Value, int],
+    value_generations: dict[Value, int],
+) -> None:
+    root = storage_roots.get(value)
+    if root is None:
+        _fail(op_index, op, "operand has no storage-generation metadata")
+    if value_generations.get(value) != root_generations[root]:
+        _fail(
+            op_index,
+            op,
+            "stale tensor view/alias refers to an older storage generation",
+        )
+
+
+def _is_full_root_handle(value: Value) -> bool:
+    owner = _storage_root(value)
+    if value is owner:
+        return True
+    producer = value.producer
+    return (
+        producer is not None
+        and producer.opcode == "copy_into"
+        and producer.results[0] is value
+        and value.type == owner.type
+    )
+
+
+def _storage_root(value: Value) -> Value:
+    current = value
+    seen: set[Value] = set()
+    while True:
+        if current in seen:
+            raise VerificationError("tensor alias cycle detected")
+        seen.add(current)
+        producer = current.producer
+        if producer is None:
+            return current
+        if producer.opcode in _ALIAS_OPCODES:
+            current = producer.operands[0]
+            continue
+        if producer.opcode == "copy_into":
+            current = producer.operands[0]
+            continue
+        return current
 
 
 def _expect_arity(op_index: int, op: Operation, operands: int, results: int) -> None:

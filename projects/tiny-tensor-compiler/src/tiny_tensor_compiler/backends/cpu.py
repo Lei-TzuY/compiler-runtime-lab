@@ -5,69 +5,83 @@ from typing import Any
 
 import numpy as np
 
+from ..input_binding import BorrowedLoopProgram, borrowed_slots
+from ..input_binding import borrow_inputs as bind_borrowed_inputs
 from ..input_validation import prepare_runtime_inputs
 from ..loop_ir import (
     LoopAlloc,
+    LoopCopyInto,
     LoopInput,
     LoopKernel,
     LoopProgram,
     LoopReturn,
+    LoopView,
+    fused_expression_for_kernel,
     lower_to_loops,
 )
 from ..lowering import CPUProgram
 
 ExecutionResult = np.ndarray | tuple[np.ndarray, ...]
-
-_BINARY_CHAIN_FUNCTIONS = {
-    "chain_add_add": (np.add, np.add),
-    "chain_add_mul": (np.add, np.multiply),
-    "chain_mul_add": (np.multiply, np.add),
-    "chain_mul_mul": (np.multiply, np.multiply),
-}
-_RELU_BINARY_CHAIN_OPCODES = frozenset(f"relu_{opcode}" for opcode in _BINARY_CHAIN_FUNCTIONS)
-_BINARY_TREE_FUNCTIONS = {
-    f"tree_{left}_{right}_{root}": (
-        np.add if left == "add" else np.multiply,
-        np.add if right == "add" else np.multiply,
-        np.add if root == "add" else np.multiply,
-    )
-    for left in ("add", "mul")
-    for right in ("add", "mul")
-    for root in ("add", "mul")
-}
-_RELU_BINARY_TREE_OPCODES = frozenset(f"relu_{opcode}" for opcode in _BINARY_TREE_FUNCTIONS)
-_CHAIN_TREE_FUNCTIONS = {
-    f"chain_tree_{inner}_{left}_{right}_{root}": (
-        np.add if inner == "add" else np.multiply,
-        np.add if left == "add" else np.multiply,
-        np.add if right == "add" else np.multiply,
-        np.add if root == "add" else np.multiply,
-    )
-    for inner in ("add", "mul")
-    for left in ("add", "mul")
-    for right in ("add", "mul")
-    for root in ("add", "mul")
-}
+LoopExecutionProgram = LoopProgram | BorrowedLoopProgram
 
 
-def execute(program: CPUProgram, inputs: Sequence[Any] = ()) -> ExecutionResult:
-    """Lower verified buffer IR to explicit loops and execute them on the CPU."""
-    return execute_loop(lower_to_loops(program), inputs=inputs)
+def execute(
+    program: CPUProgram,
+    inputs: Sequence[Any] = (),
+    *,
+    borrow_inputs: bool = False,
+) -> ExecutionResult:
+    """Lower verified buffer IR and optionally borrow safe external input arrays."""
+    loops: LoopExecutionProgram = lower_to_loops(program)
+    if borrow_inputs:
+        loops = bind_borrowed_inputs(loops)
+    return execute_loop(loops, inputs=inputs)
 
 
-def execute_loop(program: LoopProgram, inputs: Sequence[Any] = ()) -> ExecutionResult:
-    """Execute explicit loop IR over planned physical NumPy buffers."""
+def execute_loop(
+    program: LoopExecutionProgram,
+    inputs: Sequence[Any] = (),
+) -> ExecutionResult:
+    """Execute explicit loop IR over planned physical or borrowed NumPy buffers."""
     runtime_inputs = prepare_runtime_inputs(program.input_types, inputs)
+    direct_slots = borrowed_slots(program)
+    layouts = program.value_layouts
     buffers: dict[int, np.ndarray] = {}
     return_buffers: list[int] = []
 
     for op in program.operations:
         if isinstance(op, LoopAlloc):
-            buffers[op.buffer] = np.empty(op.type.shape, dtype=op.type.dtype.to_numpy())
+            if op.buffer not in direct_slots:
+                buffers[op.buffer] = np.empty(op.type.shape, dtype=op.type.dtype.to_numpy())
             continue
 
         if isinstance(op, LoopInput):
-            np.copyto(buffers[op.output], runtime_inputs[op.index])
+            if op.output in direct_slots:
+                buffers[op.output] = runtime_inputs[op.index]
+            else:
+                np.copyto(buffers[op.output], runtime_inputs[op.index])
+            continue
+
+        if isinstance(op, LoopView):
+            root = program.storage_root(op.output)
+            root_array = buffers[root]
+            layout = layouts[op.output]
+            itemsize = root_array.dtype.itemsize
+            viewed = np.ndarray(
+                shape=op.type.shape,
+                dtype=op.type.dtype.to_numpy(),
+                buffer=root_array,
+                offset=layout.offset * itemsize,
+                strides=tuple(stride * itemsize for stride in layout.strides),
+            )
+            if viewed.size and not np.shares_memory(viewed, root_array):
+                raise RuntimeError("verified loop view unexpectedly required a copy")
+            buffers[op.output] = viewed
+            continue
+
+        if isinstance(op, LoopCopyInto):
+            np.copyto(buffers[op.target], buffers[op.source])
+            buffers[op.output] = buffers[op.root]
             continue
 
         if isinstance(op, LoopReturn):
@@ -78,6 +92,11 @@ def execute_loop(program: LoopProgram, inputs: Sequence[Any] = ()) -> ExecutionR
             raise TypeError("unsupported CPU loop operation")
 
         output = buffers[op.output]
+        if op.opcode == "reshape":
+            source = buffers[op.inputs[0]]
+            np.copyto(output.reshape(-1), source.reshape(-1))
+            continue
+
         for output_index in np.ndindex(op.iteration_shape):
             if op.opcode == "const":
                 if op.literal is None:
@@ -101,37 +120,20 @@ def execute_loop(program: LoopProgram, inputs: Sequence[Any] = ()) -> ExecutionR
                 value = output.dtype.type(binary(values[0], values[1]))
                 zero = np.array(0, dtype=output.dtype)
                 output[output_index] = np.maximum(value, zero)
-            elif op.opcode in _BINARY_CHAIN_FUNCTIONS or op.opcode in _RELU_BINARY_CHAIN_OPCODES:
-                relu_chain = op.opcode in _RELU_BINARY_CHAIN_OPCODES
-                chain_opcode = op.opcode.removeprefix("relu_")
-                inner_fn, outer_fn = _BINARY_CHAIN_FUNCTIONS[chain_opcode]
-                inner = output.dtype.type(inner_fn(values[0], values[1]))
-                outer = output.dtype.type(outer_fn(inner, values[2]))
-                if relu_chain:
-                    zero = np.array(0, dtype=output.dtype)
-                    output[output_index] = np.maximum(outer, zero)
-                else:
-                    output[output_index] = outer
-            elif op.opcode in _BINARY_TREE_FUNCTIONS or op.opcode in _RELU_BINARY_TREE_OPCODES:
-                relu_tree = op.opcode in _RELU_BINARY_TREE_OPCODES
-                tree_opcode = op.opcode.removeprefix("relu_")
-                left_fn, right_fn, root_fn = _BINARY_TREE_FUNCTIONS[tree_opcode]
-                left = output.dtype.type(left_fn(values[0], values[1]))
-                right = output.dtype.type(right_fn(values[2], values[3]))
-                root = output.dtype.type(root_fn(left, right))
-                if relu_tree:
-                    zero = np.array(0, dtype=output.dtype)
-                    output[output_index] = np.maximum(root, zero)
-                else:
-                    output[output_index] = root
-            elif op.opcode in _CHAIN_TREE_FUNCTIONS:
-                inner_fn, left_fn, right_fn, root_fn = _CHAIN_TREE_FUNCTIONS[op.opcode]
-                inner = output.dtype.type(inner_fn(values[0], values[1]))
-                left = output.dtype.type(left_fn(inner, values[2]))
-                right = output.dtype.type(right_fn(values[3], values[4]))
-                output[output_index] = output.dtype.type(root_fn(left, right))
             else:
-                raise RuntimeError(f"unsupported CPU loop kernel: {op.opcode}")
+                expression = fused_expression_for_kernel(op)
+                if expression is None:
+                    raise RuntimeError(f"unsupported CPU loop kernel: {op.opcode}")
+                refs = dict(zip(expression.input_names, values, strict=True))
+                for step in expression.steps:
+                    if step.opcode == "relu":
+                        zero = np.array(0, dtype=output.dtype)
+                        refs[step.output] = np.maximum(refs[step.inputs[0]], zero)
+                        continue
+                    lhs, rhs = step.inputs
+                    binary = np.add if step.opcode == "add" else np.multiply
+                    refs[step.output] = output.dtype.type(binary(refs[lhs], refs[rhs]))
+                output[output_index] = refs[expression.result]
 
     if not return_buffers:
         raise RuntimeError("verified loop IR unexpectedly has no return")

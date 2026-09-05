@@ -5,29 +5,18 @@ from typing import Any
 
 import numpy as np
 
-from .inference import infer_binary, infer_relu
+from . import fused_expr
+from .inference import infer_binary, infer_relu, infer_reshape
 from .ir import DType, TensorType
-from .lowering import BufferAlloc, BufferInput, BufferReturn, CPUProgram, plan_memory
-
-_BINARY_CHAIN_OPCODES = frozenset(
-    f"chain_{inner}_{outer}"
-    for inner in ("add", "mul")
-    for outer in ("add", "mul")
-)
-_RELU_BINARY_CHAIN_OPCODES = frozenset(f"relu_{opcode}" for opcode in _BINARY_CHAIN_OPCODES)
-_BINARY_TREE_OPCODES = frozenset(
-    f"tree_{left}_{right}_{root}"
-    for left in ("add", "mul")
-    for right in ("add", "mul")
-    for root in ("add", "mul")
-)
-_RELU_BINARY_TREE_OPCODES = frozenset(f"relu_{opcode}" for opcode in _BINARY_TREE_OPCODES)
-_CHAIN_TREE_OPCODES = frozenset(
-    f"chain_tree_{inner}_{left}_{right}_{root}"
-    for inner in ("add", "mul")
-    for left in ("add", "mul")
-    for right in ("add", "mul")
-    for root in ("add", "mul")
+from .layout import StorageLayout, element_count
+from .lowering import (
+    BufferAlloc,
+    BufferCopyInto,
+    BufferInput,
+    BufferReturn,
+    BufferView,
+    CPUProgram,
+    plan_memory,
 )
 
 
@@ -59,6 +48,24 @@ class LoopInput:
 
 
 @dataclass(frozen=True)
+class LoopView:
+    output: int
+    source: int
+    type: TensorType
+    layout: StorageLayout | None = None
+
+
+@dataclass(frozen=True)
+class LoopCopyInto:
+    output: int
+    root: int
+    target: int
+    source: int
+    type: TensorType
+    layout: StorageLayout
+
+
+@dataclass(frozen=True)
 class LoopKernel:
     opcode: str
     output: int
@@ -66,6 +73,7 @@ class LoopKernel:
     iteration_shape: tuple[int, ...]
     input_maps: tuple[IndexMap, ...]
     literal: np.ndarray[Any, Any] | None = None
+    fused_expression: fused_expr.FusedExpression | None = None
 
 
 @dataclass(frozen=True)
@@ -73,7 +81,7 @@ class LoopReturn:
     buffer: int
 
 
-LoopOperation = LoopAlloc | LoopInput | LoopKernel | LoopReturn
+LoopOperation = LoopAlloc | LoopInput | LoopView | LoopCopyInto | LoopKernel | LoopReturn
 
 
 @dataclass(frozen=True)
@@ -92,8 +100,59 @@ class LoopProgram:
         return tuple(op for op in self.operations if isinstance(op, LoopInput))
 
     @property
-    def input_types(self) -> tuple[TensorType, ...]:
+    def views(self) -> tuple[LoopView, ...]:
+        return tuple(op for op in self.operations if isinstance(op, LoopView))
+
+    @property
+    def copies(self) -> tuple[LoopCopyInto, ...]:
+        return tuple(op for op in self.operations if isinstance(op, LoopCopyInto))
+
+    @property
+    def value_types(self) -> dict[int, TensorType]:
         types = {alloc.buffer: alloc.type for alloc in self.allocations}
+        types.update(
+            {
+                op.output: op.type
+                for op in self.operations
+                if isinstance(op, (LoopView, LoopCopyInto))
+            }
+        )
+        return types
+
+    @property
+    def value_layouts(self) -> dict[int, StorageLayout]:
+        types = self.value_types
+        layouts = {
+            alloc.buffer: StorageLayout.contiguous(alloc.type.shape) for alloc in self.allocations
+        }
+        roots = {alloc.buffer: alloc.buffer for alloc in self.allocations}
+        root_types = {alloc.buffer: alloc.type for alloc in self.allocations}
+        for op in self.operations:
+            if isinstance(op, LoopView):
+                source_layout = layouts[op.source]
+                root = roots[op.source]
+                layout = (
+                    source_layout.reshaped(types[op.source].shape, op.type.shape)
+                    if op.layout is None
+                    else op.layout
+                )
+                layout.validate_bounds(op.type.shape, element_count(root_types[root].shape))
+                layouts[op.output] = layout
+                roots[op.output] = root
+            elif isinstance(op, LoopCopyInto):
+                if op.root not in roots:
+                    raise ValueError("copy_into root handle has no storage root")
+                root = roots[op.root]
+                if types[op.root] != root_types[root] or layouts[op.root] != layouts[root]:
+                    raise ValueError("copy_into root handle must expose the full owning root")
+                op.layout.validate_bounds(op.type.shape, element_count(root_types[root].shape))
+                layouts[op.output] = op.layout
+                roots[op.output] = root
+        return layouts
+
+    @property
+    def input_types(self) -> tuple[TensorType, ...]:
+        types = self.value_types
         return tuple(types[op.output] for op in self.inputs)
 
     @property
@@ -114,6 +173,22 @@ class LoopProgram:
             )
         return slots[0]
 
+    def storage_root(self, buffer: int) -> int:
+        roots = {alloc.buffer: alloc.buffer for alloc in self.allocations}
+        for op in self.operations:
+            if isinstance(op, LoopView):
+                if op.source not in roots:
+                    raise KeyError(f"view source p{op.source} has no storage root")
+                roots[op.output] = roots[op.source]
+            elif isinstance(op, LoopCopyInto):
+                if op.root not in roots:
+                    raise KeyError(f"copy_into root handle p{op.root} has no storage root")
+                roots[op.output] = roots[op.root]
+        try:
+            return roots[buffer]
+        except KeyError as exc:
+            raise KeyError(f"loop value p{buffer} has no storage root") from exc
+
     def dump(self) -> str:
         lines: list[str] = []
         for op in self.operations:
@@ -122,6 +197,20 @@ class LoopProgram:
                 continue
             if isinstance(op, LoopInput):
                 lines.append(f"p{op.output} = input {op.index}")
+                continue
+            if isinstance(op, LoopView):
+                suffix = (
+                    ""
+                    if op.layout is None
+                    else f" offset={op.layout.offset} strides={op.layout.strides}"
+                )
+                lines.append(f"p{op.output} = view p{op.source}{suffix} : {op.type}")
+                continue
+            if isinstance(op, LoopCopyInto):
+                lines.append(
+                    f"p{op.output} = copy_into root=p{op.root} target=p{op.target} "
+                    f"source=p{op.source} : {op.type}"
+                )
                 continue
             if isinstance(op, LoopReturn):
                 lines.append(f"return p{op.buffer}")
@@ -135,6 +224,8 @@ class LoopProgram:
                 literal = _format_literal(op.literal)
                 literal_index = "" if op.literal.ndim == 0 else output_index
                 rhs = f"const {literal}{literal_index}"
+            elif op.opcode == "reshape":
+                rhs = f"reshape p{op.inputs[0]}[linear]"
             else:
                 operands = ", ".join(
                     f"p{buffer}{_format_index(index_map.axes)}"
@@ -145,10 +236,23 @@ class LoopProgram:
         return "\n".join(lines)
 
 
+def fused_expression_for_kernel(op: LoopKernel) -> fused_expr.FusedExpression | None:
+    """Return structured fused semantics, decoding legacy spelling only as fallback."""
+    if op.fused_expression is None:
+        return fused_expr.describe_fused_opcode(op.opcode)
+    if fused_expr.encode_fused_opcode(op.fused_expression) != op.opcode:
+        raise ValueError("loop fused expression metadata does not match opcode")
+    return op.fused_expression
+
+
 def lower_to_loops(program: CPUProgram) -> LoopProgram:
-    """Lower verified virtual-buffer operations to explicit physical-buffer loops."""
+    """Lower verified virtual-buffer operations to storage roots plus logical loop views."""
     plan = plan_memory(program)
     virtual_types = {alloc.buffer: alloc.type for alloc in program.allocations}
+    virtual_handles = {
+        assignment.virtual: assignment.physical for assignment in plan.assignments
+    }
+    next_handle = plan.physical_count
     operations: list[LoopOperation] = [
         LoopAlloc(slot, buffer_type) for slot, buffer_type in enumerate(plan.physical_types)
     ]
@@ -157,24 +261,57 @@ def lower_to_loops(program: CPUProgram) -> LoopProgram:
         if isinstance(op, BufferAlloc):
             continue
         if isinstance(op, BufferInput):
-            operations.append(LoopInput(plan.physical_for(op.output), op.index))
+            operations.append(LoopInput(virtual_handles[op.output], op.index))
+            continue
+        if isinstance(op, BufferView):
+            source = virtual_handles[op.source]
+            handle = next_handle
+            next_handle += 1
+            virtual_handles[op.output] = handle
+            alias = plan.alias_for(op.output)
+            if alias is None:
+                raise RuntimeError("planned buffer view unexpectedly has no alias descriptor")
+            operations.append(LoopView(handle, source, virtual_types[op.output], alias.layout))
+            continue
+        if isinstance(op, BufferCopyInto):
+            handle = next_handle
+            next_handle += 1
+            virtual_handles[op.output] = handle
+            alias = plan.alias_for(op.output)
+            if alias is None:
+                raise RuntimeError("planned copy_into result unexpectedly has no alias descriptor")
+            operations.append(
+                LoopCopyInto(
+                    output=handle,
+                    root=virtual_handles[op.root],
+                    target=virtual_handles[op.target],
+                    source=virtual_handles[op.source],
+                    type=virtual_types[op.output],
+                    layout=alias.layout,
+                )
+            )
             continue
         if isinstance(op, BufferReturn):
-            operations.append(LoopReturn(plan.physical_for(op.buffer)))
+            operations.append(LoopReturn(virtual_handles[op.buffer]))
             continue
 
         output_type = virtual_types[op.output]
         input_types = tuple(virtual_types[buffer] for buffer in op.inputs)
+        input_maps = (
+            ()
+            if op.opcode == "reshape"
+            else tuple(
+                _broadcast_index_map(input_type.shape, output_type.shape)
+                for input_type in input_types
+            )
+        )
         operations.append(
             LoopKernel(
                 opcode=op.opcode,
-                output=plan.physical_for(op.output),
-                inputs=tuple(plan.physical_for(buffer) for buffer in op.inputs),
+                output=virtual_handles[op.output],
+                inputs=tuple(virtual_handles[buffer] for buffer in op.inputs),
                 iteration_shape=output_type.shape,
-                input_maps=tuple(
-                    _broadcast_index_map(input_type.shape, output_type.shape)
-                    for input_type in input_types
-                ),
+                input_maps=input_maps,
                 literal=op.literal,
             )
         )
@@ -183,321 +320,10 @@ def lower_to_loops(program: CPUProgram) -> LoopProgram:
 
 
 def fuse_elementwise(program: LoopProgram) -> LoopProgram:
-    """Fuse conservative adjacent elementwise kernels without changing numeric semantics."""
-    operations = program.operations
-    types = {alloc.buffer: alloc.type for alloc in program.allocations}
-    fused: list[LoopOperation] = []
-    index = 0
-    fusible_producers = {
-        "add",
-        "mul",
-        "relu",
-        "relu_add",
-        "relu_mul",
-        *_BINARY_CHAIN_OPCODES,
-        *_RELU_BINARY_CHAIN_OPCODES,
-    }
+    """Compatibility entry point for the sole topology-driven fusion planner."""
+    from .fusion_planner import fuse_elementwise as plan_elementwise_fusion
 
-    while index < len(operations):
-        chain_tree = _fuse_integer_chain_tree(operations, index, types)
-        if chain_tree is not None:
-            fused.append(chain_tree)
-            index += 4
-            continue
-
-        binary_tree = _fuse_integer_binary_tree(operations, index, types)
-        if binary_tree is not None:
-            next_index = index + 3
-            if next_index < len(operations):
-                consumer = operations[next_index]
-                if isinstance(consumer, LoopKernel) and _can_fuse_relu_consumer(
-                    operations,
-                    next_index,
-                    binary_tree,
-                    consumer,
-                ):
-                    binary_tree = LoopKernel(
-                        opcode=f"relu_{binary_tree.opcode}",
-                        output=consumer.output,
-                        inputs=binary_tree.inputs,
-                        iteration_shape=consumer.iteration_shape,
-                        input_maps=binary_tree.input_maps,
-                    )
-                    next_index += 1
-            fused.append(binary_tree)
-            index = next_index
-            continue
-
-        producer = operations[index]
-        if not isinstance(producer, LoopKernel) or producer.opcode not in fusible_producers:
-            fused.append(producer)
-            index += 1
-            continue
-
-        current = producer
-        next_index = index + 1
-        while next_index < len(operations):
-            consumer = operations[next_index]
-            if not isinstance(consumer, LoopKernel):
-                break
-
-            binary_chain = _fuse_integer_binary_consumer(
-                operations,
-                next_index,
-                current,
-                consumer,
-                types,
-            )
-            if binary_chain is not None:
-                current = binary_chain
-                next_index += 1
-                continue
-
-            if not _can_fuse_relu_consumer(operations, next_index, current, consumer):
-                break
-
-            opcode = current.opcode
-            if opcode in {"add", "mul"} or opcode in _BINARY_CHAIN_OPCODES:
-                opcode = f"relu_{opcode}"
-            current = LoopKernel(
-                opcode=opcode,
-                output=consumer.output,
-                inputs=current.inputs,
-                iteration_shape=consumer.iteration_shape,
-                input_maps=current.input_maps,
-            )
-            next_index += 1
-
-        fused.append(current)
-        index = next_index
-
-    return LoopProgram(tuple(fused))
-
-
-def _fuse_integer_chain_tree(
-    operations: tuple[LoopOperation, ...],
-    start_index: int,
-    types: dict[int, TensorType],
-) -> LoopKernel | None:
-    if start_index + 3 >= len(operations):
-        return None
-
-    inner = operations[start_index]
-    left = operations[start_index + 1]
-    right = operations[start_index + 2]
-    root = operations[start_index + 3]
-    if not all(isinstance(op, LoopKernel) for op in (inner, left, right, root)):
-        return None
-    if any(op.opcode not in {"add", "mul"} for op in (inner, left, right, root)):
-        return None
-    if not (
-        inner.iteration_shape
-        == left.iteration_shape
-        == right.iteration_shape
-        == root.iteration_shape
-    ):
-        return None
-
-    identity = IndexMap(tuple(range(len(root.iteration_shape))))
-    inner_positions = tuple(
-        index for index, buffer in enumerate(left.inputs) if buffer == inner.output
-    )
-    if len(inner_positions) != 1:
-        return None
-    inner_position = inner_positions[0]
-    if left.input_maps[inner_position] != identity:
-        return None
-    if root.inputs != (left.output, right.output) or root.input_maps != (identity, identity):
-        return None
-    if left.output in right.inputs:
-        return None
-    if not _producer_value_has_no_later_use(operations, start_index + 2, inner.output):
-        return None
-    if not _producer_value_has_no_later_use(operations, start_index + 4, left.output):
-        return None
-    if not _producer_value_has_no_later_use(operations, start_index + 4, right.output):
-        return None
-
-    other_position = 1 - inner_position
-    fused_inputs = (*inner.inputs, left.inputs[other_position], *right.inputs)
-    if root.output in fused_inputs:
-        return None
-
-    output_type = types[root.output]
-    if output_type.dtype not in {DType.INT32, DType.INT64}:
-        return None
-    if any(
-        types[buffer] != output_type for buffer in (inner.output, left.output, right.output)
-    ):
-        return None
-    if any(types[buffer].dtype != output_type.dtype for buffer in fused_inputs):
-        return None
-
-    return LoopKernel(
-        opcode=f"chain_tree_{inner.opcode}_{left.opcode}_{right.opcode}_{root.opcode}",
-        output=root.output,
-        inputs=fused_inputs,
-        iteration_shape=root.iteration_shape,
-        input_maps=(
-            *inner.input_maps,
-            left.input_maps[other_position],
-            *right.input_maps,
-        ),
-    )
-
-
-def _fuse_integer_binary_tree(
-    operations: tuple[LoopOperation, ...],
-    start_index: int,
-    types: dict[int, TensorType],
-) -> LoopKernel | None:
-    if start_index + 2 >= len(operations):
-        return None
-
-    left = operations[start_index]
-    right = operations[start_index + 1]
-    root = operations[start_index + 2]
-    if not all(isinstance(op, LoopKernel) for op in (left, right, root)):
-        return None
-    if left.opcode not in {"add", "mul"} or right.opcode not in {"add", "mul"}:
-        return None
-    if root.opcode not in {"add", "mul"}:
-        return None
-    if not (left.iteration_shape == right.iteration_shape == root.iteration_shape):
-        return None
-
-    identity = IndexMap(tuple(range(len(root.iteration_shape))))
-    if root.inputs != (left.output, right.output) or root.input_maps != (identity, identity):
-        return None
-    if left.output in right.inputs:
-        return None
-    if not _producer_value_has_no_later_use(operations, start_index + 3, left.output):
-        return None
-    if not _producer_value_has_no_later_use(operations, start_index + 3, right.output):
-        return None
-
-    fused_inputs = (*left.inputs, *right.inputs)
-    if root.output in fused_inputs:
-        return None
-
-    output_type = types[root.output]
-    if output_type.dtype not in {DType.INT32, DType.INT64}:
-        return None
-    if types[left.output] != output_type or types[right.output] != output_type:
-        return None
-    if any(types[buffer].dtype != output_type.dtype for buffer in fused_inputs):
-        return None
-
-    return LoopKernel(
-        opcode=f"tree_{left.opcode}_{right.opcode}_{root.opcode}",
-        output=root.output,
-        inputs=fused_inputs,
-        iteration_shape=root.iteration_shape,
-        input_maps=(*left.input_maps, *right.input_maps),
-    )
-
-
-def _fuse_integer_binary_consumer(
-    operations: tuple[LoopOperation, ...],
-    consumer_index: int,
-    producer: LoopKernel,
-    consumer: LoopKernel,
-    types: dict[int, TensorType],
-) -> LoopKernel | None:
-    if producer.opcode not in {"add", "mul"} or consumer.opcode not in {"add", "mul"}:
-        return None
-    if producer.iteration_shape != consumer.iteration_shape:
-        return None
-
-    producer_positions = tuple(
-        index for index, buffer in enumerate(consumer.inputs) if buffer == producer.output
-    )
-    if len(producer_positions) != 1:
-        return None
-    producer_position = producer_positions[0]
-    identity = IndexMap(tuple(range(len(consumer.iteration_shape))))
-    if consumer.input_maps[producer_position] != identity:
-        return None
-
-    if _consumer_has_fusible_relu(operations, consumer_index, consumer):
-        return None
-    if not _producer_value_has_no_later_use(operations, consumer_index + 1, producer.output):
-        return None
-
-    other_position = 1 - producer_position
-    fused_inputs = (*producer.inputs, consumer.inputs[other_position])
-    if consumer.output in fused_inputs:
-        return None
-
-    output_type = types[consumer.output]
-    if output_type.dtype not in {DType.INT32, DType.INT64}:
-        return None
-    if types[producer.output] != output_type:
-        return None
-    if any(types[buffer].dtype != output_type.dtype for buffer in fused_inputs):
-        return None
-
-    return LoopKernel(
-        opcode=f"chain_{producer.opcode}_{consumer.opcode}",
-        output=consumer.output,
-        inputs=fused_inputs,
-        iteration_shape=consumer.iteration_shape,
-        input_maps=(*producer.input_maps, consumer.input_maps[other_position]),
-    )
-
-
-def _consumer_has_fusible_relu(
-    operations: tuple[LoopOperation, ...],
-    consumer_index: int,
-    consumer: LoopKernel,
-) -> bool:
-    relu_index = consumer_index + 1
-    if relu_index >= len(operations):
-        return False
-    relu = operations[relu_index]
-    return isinstance(relu, LoopKernel) and _can_fuse_relu_consumer(
-        operations,
-        relu_index,
-        consumer,
-        relu,
-    )
-
-
-def _can_fuse_relu_consumer(
-    operations: tuple[LoopOperation, ...],
-    consumer_index: int,
-    producer: LoopKernel,
-    consumer: LoopKernel,
-) -> bool:
-    if consumer.opcode != "relu" or consumer.inputs != (producer.output,):
-        return False
-    if producer.iteration_shape != consumer.iteration_shape:
-        return False
-    identity = IndexMap(tuple(range(len(consumer.iteration_shape))))
-    if consumer.input_maps != (identity,):
-        return False
-    if consumer.output in producer.inputs:
-        return False
-    return _producer_value_has_no_later_use(operations, consumer_index + 1, producer.output)
-
-
-def _producer_value_has_no_later_use(
-    operations: tuple[LoopOperation, ...],
-    start_index: int,
-    buffer: int,
-) -> bool:
-    for op in operations[start_index:]:
-        if isinstance(op, LoopInput):
-            if op.output == buffer:
-                return True
-        elif isinstance(op, LoopKernel):
-            if op.output == buffer:
-                return True
-            if buffer in op.inputs:
-                return False
-        elif isinstance(op, LoopReturn) and op.buffer == buffer:
-            return False
-    return True
+    return plan_elementwise_fusion(program)
 
 
 def _broadcast_index_map(input_shape: tuple[int, ...], output_shape: tuple[int, ...]) -> IndexMap:
@@ -520,9 +346,15 @@ def _broadcast_index_map(input_shape: tuple[int, ...], output_shape: tuple[int, 
 
 def _verify_loop_ir(operations: tuple[LoopOperation, ...]) -> None:
     allocated: dict[int, TensorType] = {}
+    types: dict[int, TensorType] = {}
+    layouts: dict[int, StorageLayout] = {}
+    roots: dict[int, int] = {}
     written: set[int] = set()
+    input_roots: set[int] = set()
+    root_generations: dict[int, int] = {}
+    value_generations: dict[int, int] = {}
     next_input_index = 0
-    saw_kernel = False
+    saw_execution = False
     saw_return = False
 
     for index, op in enumerate(operations):
@@ -530,42 +362,122 @@ def _verify_loop_ir(operations: tuple[LoopOperation, ...]) -> None:
             raise ValueError("loop IR operation appears after return")
 
         if isinstance(op, LoopAlloc):
-            if saw_kernel:
+            if saw_execution:
                 raise ValueError("physical buffer allocation appears after loop execution begins")
             if op.buffer < 0:
                 raise ValueError(f"invalid negative physical buffer p{op.buffer}")
-            if op.buffer in allocated:
+            if op.buffer in types:
                 raise ValueError(f"physical buffer p{op.buffer} is allocated more than once")
             allocated[op.buffer] = op.type
+            types[op.buffer] = op.type
+            layouts[op.buffer] = StorageLayout.contiguous(op.type.shape)
+            roots[op.buffer] = op.buffer
+            root_generations[op.buffer] = 0
             continue
 
         if isinstance(op, LoopInput):
-            saw_kernel = True
+            saw_execution = True
             if op.output not in allocated:
-                raise ValueError(f"loop input destination p{op.output} is not allocated")
+                raise ValueError(f"loop input destination p{op.output} is not allocated storage")
             if op.index != next_input_index:
                 raise ValueError(
                     f"input index {op.index} is not the next dense input index {next_input_index}"
                 )
             next_input_index += 1
+            root_generations[op.output] += 1
+            value_generations[op.output] = root_generations[op.output]
+            input_roots.add(op.output)
+            written.add(op.output)
+            continue
+
+        if isinstance(op, LoopView):
+            saw_execution = True
+            if op.output < 0:
+                raise ValueError(f"invalid negative loop view id p{op.output}")
+            if op.output in types:
+                raise ValueError(f"loop view p{op.output} collides with an existing loop value")
+            if op.source not in types:
+                raise ValueError(f"loop view source p{op.source} is not defined")
+            if op.source not in written:
+                raise ValueError(f"loop view source p{op.source} is not written")
+            _verify_fresh_value(op.source, roots, root_generations, value_generations)
+            if op.type.dtype != types[op.source].dtype:
+                raise ValueError("loop view cannot change storage dtype")
+            root = roots[op.source]
+            if op.layout is None:
+                expected = infer_reshape(types[op.source], op.type.shape)
+                if expected != op.type:
+                    raise ValueError("loop view type does not match contiguous reshape inference")
+                layout = layouts[op.source].reshaped(types[op.source].shape, op.type.shape)
+            else:
+                layout = op.layout
+            layout.validate_bounds(op.type.shape, element_count(allocated[root].shape))
+            types[op.output] = op.type
+            layouts[op.output] = layout
+            roots[op.output] = root
+            value_generations[op.output] = value_generations[op.source]
+            written.add(op.output)
+            continue
+
+        if isinstance(op, LoopCopyInto):
+            saw_execution = True
+            if op.output < 0:
+                raise ValueError(f"invalid negative copy_into result id p{op.output}")
+            if op.output in types:
+                raise ValueError(f"copy_into result p{op.output} collides with an existing loop value")
+            for buffer in (op.root, op.target, op.source):
+                if buffer not in types:
+                    raise ValueError(f"copy_into input p{buffer} is not defined")
+                if buffer not in written:
+                    raise ValueError(f"copy_into input p{buffer} is not written")
+                _verify_fresh_value(buffer, roots, root_generations, value_generations)
+            root = roots[op.root]
+            if root not in allocated:
+                raise ValueError("copy_into root handle has no owning storage")
+            if root in input_roots:
+                raise ValueError("copy_into cannot mutate borrowed or copied runtime input storage")
+            if types[op.root] != allocated[root] or layouts[op.root] != layouts[root]:
+                raise ValueError("copy_into root must be a fresh full-root handle")
+            if roots[op.target] != root:
+                raise ValueError("copy_into target must alias its owning root")
+            if roots[op.source] == root:
+                raise ValueError("copy_into source must use a different storage root")
+            if types[op.target] != types[op.source]:
+                raise ValueError("copy_into target and source types must exactly match")
+            if op.type != allocated[root]:
+                raise ValueError("copy_into fresh result type must match its owning root")
+            if op.layout != layouts[root]:
+                raise ValueError("copy_into fresh result must expose the full owning root layout")
+            op.layout.validate_bounds(op.type.shape, element_count(allocated[root].shape))
+
+            root_generations[root] += 1
+            types[op.output] = op.type
+            layouts[op.output] = op.layout
+            roots[op.output] = root
+            value_generations[op.output] = root_generations[root]
             written.add(op.output)
             continue
 
         if isinstance(op, LoopKernel):
-            saw_kernel = True
+            saw_execution = True
             if op.output not in allocated:
-                raise ValueError(f"loop output p{op.output} is not allocated")
-            if op.output in op.inputs:
-                raise ValueError("loop kernels do not permit in-place input/output aliasing")
+                raise ValueError(f"loop output p{op.output} is not allocated storage")
             for buffer in op.inputs:
-                if buffer not in allocated:
-                    raise ValueError(f"loop input p{buffer} is not allocated")
+                if buffer not in types:
+                    raise ValueError(f"loop input p{buffer} is not defined")
                 if buffer not in written:
                     raise ValueError(f"loop input p{buffer} is read before being written")
+                _verify_fresh_value(buffer, roots, root_generations, value_generations)
+            output_root = roots[op.output]
+            if any(roots[buffer] == output_root for buffer in op.inputs):
+                raise ValueError("loop kernels do not permit output/input storage aliasing")
 
-            output_type = allocated[op.output]
+            output_type = types[op.output]
             if op.iteration_shape != output_type.shape:
                 raise ValueError("loop iteration shape must match output buffer shape")
+
+            if op.fused_expression is not None:
+                fused_expression_for_kernel(op)
 
             if op.opcode == "const":
                 if op.inputs or op.input_maps:
@@ -580,124 +492,51 @@ def _verify_loop_ir(operations: tuple[LoopOperation, ...]) -> None:
             elif op.opcode in {"add", "mul"}:
                 if len(op.inputs) != 2 or len(op.input_maps) != 2 or op.literal is not None:
                     raise ValueError(f"{op.opcode} loop requires two inputs and two index maps")
-                expected = infer_binary(allocated[op.inputs[0]], allocated[op.inputs[1]])
+                expected = infer_binary(types[op.inputs[0]], types[op.inputs[1]])
                 if expected != output_type:
                     raise ValueError(f"{op.opcode} loop output buffer type does not match inference")
-                _verify_index_maps(op, allocated)
+                _verify_index_maps(op, types)
             elif op.opcode == "relu":
                 if len(op.inputs) != 1 or len(op.input_maps) != 1 or op.literal is not None:
                     raise ValueError("relu loop requires one input and one index map")
-                expected = infer_relu(allocated[op.inputs[0]])
+                expected = infer_relu(types[op.inputs[0]])
                 if expected != output_type:
                     raise ValueError("relu loop output buffer type does not match inference")
-                _verify_index_maps(op, allocated)
+                _verify_index_maps(op, types)
+            elif op.opcode == "reshape":
+                if len(op.inputs) != 1 or op.input_maps or op.literal is not None:
+                    raise ValueError("reshape loop requires one input, no index maps, and no literal")
+                expected = infer_reshape(types[op.inputs[0]], output_type.shape)
+                if expected != output_type:
+                    raise ValueError("reshape loop output buffer type does not match inference")
             elif op.opcode in {"relu_add", "relu_mul"}:
                 if len(op.inputs) != 2 or len(op.input_maps) != 2 or op.literal is not None:
                     raise ValueError(
                         f"{op.opcode} loop requires two inputs and two index maps"
                     )
-                binary_type = infer_binary(allocated[op.inputs[0]], allocated[op.inputs[1]])
+                binary_type = infer_binary(types[op.inputs[0]], types[op.inputs[1]])
                 expected = infer_relu(binary_type)
                 if expected != output_type:
                     raise ValueError(f"{op.opcode} loop output buffer type does not match inference")
-                _verify_index_maps(op, allocated)
-            elif op.opcode in _BINARY_CHAIN_OPCODES | _RELU_BINARY_CHAIN_OPCODES:
-                if len(op.inputs) != 3 or len(op.input_maps) != 3 or op.literal is not None:
-                    raise ValueError(
-                        f"{op.opcode} loop requires three inputs and three index maps"
-                    )
-                relu_chain = op.opcode in _RELU_BINARY_CHAIN_OPCODES
-                chain_name = "integer ReLU binary-chain" if relu_chain else "integer binary-chain"
-                if output_type.dtype not in {DType.INT32, DType.INT64}:
-                    raise ValueError(f"{chain_name} loop requires an integer output dtype")
-                if any(allocated[buffer].dtype != output_type.dtype for buffer in op.inputs):
-                    raise ValueError(f"{chain_name} loop requires one exact integer dtype")
-
-                inner_opcode, outer_opcode = _binary_chain_parts(op.opcode)
-                inner_type = infer_binary(allocated[op.inputs[0]], allocated[op.inputs[1]])
-                if inner_type != output_type:
-                    raise ValueError(
-                        f"{op.opcode} loop intermediate type must match its output type"
-                    )
-                outer_type = infer_binary(inner_type, allocated[op.inputs[2]])
-                expected = infer_relu(outer_type) if relu_chain else outer_type
-                if expected != output_type:
-                    raise ValueError(f"{op.opcode} loop output buffer type does not match inference")
-                if inner_opcode not in {"add", "mul"} or outer_opcode not in {"add", "mul"}:
-                    raise ValueError(f"unsupported integer binary-chain loop: {op.opcode}")
-                _verify_index_maps(op, allocated)
-            elif op.opcode in _BINARY_TREE_OPCODES | _RELU_BINARY_TREE_OPCODES:
-                if len(op.inputs) != 4 or len(op.input_maps) != 4 or op.literal is not None:
-                    raise ValueError(
-                        f"{op.opcode} loop requires four inputs and four index maps"
-                    )
-                relu_tree = op.opcode in _RELU_BINARY_TREE_OPCODES
-                tree_name = "integer ReLU binary-tree" if relu_tree else "integer binary-tree"
-                if output_type.dtype not in {DType.INT32, DType.INT64}:
-                    raise ValueError(f"{tree_name} loop requires an integer output dtype")
-                if any(allocated[buffer].dtype != output_type.dtype for buffer in op.inputs):
-                    raise ValueError(f"{tree_name} loop requires one exact integer dtype")
-
-                left_opcode, right_opcode, root_opcode = _binary_tree_parts(op.opcode)
-                left_type = infer_binary(allocated[op.inputs[0]], allocated[op.inputs[1]])
-                right_type = infer_binary(allocated[op.inputs[2]], allocated[op.inputs[3]])
-                if left_type != output_type or right_type != output_type:
-                    raise ValueError(
-                        f"{op.opcode} loop intermediate types must match its output type"
-                    )
-                root_type = infer_binary(left_type, right_type)
-                expected = infer_relu(root_type) if relu_tree else root_type
-                if expected != output_type:
-                    raise ValueError(f"{op.opcode} loop output buffer type does not match inference")
-                if any(
-                    opcode not in {"add", "mul"}
-                    for opcode in (left_opcode, right_opcode, root_opcode)
-                ):
-                    raise ValueError(f"unsupported integer binary-tree loop: {op.opcode}")
-                _verify_index_maps(op, allocated)
-            elif op.opcode in _CHAIN_TREE_OPCODES:
-                if len(op.inputs) != 5 or len(op.input_maps) != 5 or op.literal is not None:
-                    raise ValueError(
-                        f"{op.opcode} loop requires five inputs and five index maps"
-                    )
-                if output_type.dtype not in {DType.INT32, DType.INT64}:
-                    raise ValueError("integer chain-tree loop requires an integer output dtype")
-                if any(allocated[buffer].dtype != output_type.dtype for buffer in op.inputs):
-                    raise ValueError("integer chain-tree loop requires one exact integer dtype")
-
-                inner_opcode, left_opcode, right_opcode, root_opcode = _chain_tree_parts(op.opcode)
-                inner_type = infer_binary(allocated[op.inputs[0]], allocated[op.inputs[1]])
-                left_type = infer_binary(inner_type, allocated[op.inputs[2]])
-                right_type = infer_binary(allocated[op.inputs[3]], allocated[op.inputs[4]])
-                if (
-                    inner_type != output_type
-                    or left_type != output_type
-                    or right_type != output_type
-                ):
-                    raise ValueError(
-                        f"{op.opcode} loop intermediate types must match its output type"
-                    )
-                expected = infer_binary(left_type, right_type)
-                if expected != output_type:
-                    raise ValueError(f"{op.opcode} loop output buffer type does not match inference")
-                if any(
-                    opcode not in {"add", "mul"}
-                    for opcode in (inner_opcode, left_opcode, right_opcode, root_opcode)
-                ):
-                    raise ValueError(f"unsupported integer chain-tree loop: {op.opcode}")
-                _verify_index_maps(op, allocated)
+                _verify_index_maps(op, types)
             else:
-                raise ValueError(f"unsupported loop kernel: {op.opcode}")
+                expression = fused_expression_for_kernel(op)
+                if expression is None:
+                    raise ValueError(f"unsupported loop kernel: {op.opcode}")
+                _verify_fused_expression(op, expression, types, output_type)
 
+            root_generations[output_root] += 1
+            value_generations[op.output] = root_generations[output_root]
             written.add(op.output)
             continue
 
         if not isinstance(op, LoopReturn):
             raise TypeError(f"unsupported loop IR operation at index {index}")
-        if op.buffer not in allocated:
-            raise ValueError(f"returned physical buffer p{op.buffer} is not allocated")
+        if op.buffer not in types:
+            raise ValueError(f"returned loop value p{op.buffer} is not defined")
         if op.buffer not in written:
-            raise ValueError(f"returned physical buffer p{op.buffer} is not written")
+            raise ValueError(f"returned loop value p{op.buffer} is not written")
+        _verify_fresh_value(op.buffer, roots, root_generations, value_generations)
         saw_return = True
 
     if not saw_return:
@@ -706,34 +545,72 @@ def _verify_loop_ir(operations: tuple[LoopOperation, ...]) -> None:
         raise ValueError("physical loop buffer ids must be dense starting at p0")
 
 
-def _binary_chain_parts(opcode: str) -> tuple[str, str]:
-    if opcode in _RELU_BINARY_CHAIN_OPCODES:
-        opcode = opcode.removeprefix("relu_")
-    if opcode not in _BINARY_CHAIN_OPCODES:
-        raise ValueError(f"unsupported integer binary-chain loop: {opcode}")
-    _, inner_opcode, outer_opcode = opcode.split("_")
-    return inner_opcode, outer_opcode
+def _verify_fresh_value(
+    buffer: int,
+    roots: dict[int, int],
+    root_generations: dict[int, int],
+    value_generations: dict[int, int],
+) -> None:
+    root = roots[buffer]
+    if value_generations.get(buffer) != root_generations[root]:
+        raise ValueError(
+            f"stale loop view/alias p{buffer} refers to an older generation of storage p{root}"
+        )
 
 
-def _binary_tree_parts(opcode: str) -> tuple[str, str, str]:
-    if opcode in _RELU_BINARY_TREE_OPCODES:
-        opcode = opcode.removeprefix("relu_")
-    if opcode not in _BINARY_TREE_OPCODES:
-        raise ValueError(f"unsupported integer binary-tree loop: {opcode}")
-    _, left_opcode, right_opcode, root_opcode = opcode.split("_")
-    return left_opcode, right_opcode, root_opcode
+def _verify_fused_expression(
+    op: LoopKernel,
+    expression: fused_expr.FusedExpression,
+    types: dict[int, TensorType],
+    output_type: TensorType,
+) -> None:
+    arity_word = {3: "three", 4: "four", 5: "five"}.get(
+        expression.input_count,
+        str(expression.input_count),
+    )
+    if (
+        len(op.inputs) != expression.input_count
+        or len(op.input_maps) != expression.input_count
+        or op.literal is not None
+    ):
+        raise ValueError(
+            f"{op.opcode} loop requires {arity_word} inputs and {arity_word} index maps"
+        )
+
+    if output_type.dtype not in {DType.INT32, DType.INT64}:
+        raise ValueError(f"{expression.display_name} loop requires an integer output dtype")
+    if any(types[buffer].dtype != output_type.dtype for buffer in op.inputs):
+        raise ValueError(f"{expression.display_name} loop requires one exact integer dtype")
+
+    refs = {
+        name: types[buffer]
+        for name, buffer in zip(expression.input_names, op.inputs, strict=True)
+    }
+    for step_index, step in enumerate(expression.steps):
+        if step.opcode == "relu":
+            expected = infer_relu(refs[step.inputs[0]])
+        else:
+            lhs, rhs = step.inputs
+            expected = infer_binary(refs[lhs], refs[rhs])
+        refs[step.output] = expected
+        if expected == output_type:
+            continue
+
+        final_step = step_index == len(expression.steps) - 1
+        pre_relu_step = expression.terminal_relu and step_index == len(expression.steps) - 2
+        if final_step or pre_relu_step:
+            raise ValueError(f"{op.opcode} loop output buffer type does not match inference")
+        intermediate = "type" if expression.family == "binary-chain" else "types"
+        raise ValueError(
+            f"{op.opcode} loop intermediate {intermediate} must match its output type"
+        )
+
+    _verify_index_maps(op, types)
 
 
-def _chain_tree_parts(opcode: str) -> tuple[str, str, str, str]:
-    if opcode not in _CHAIN_TREE_OPCODES:
-        raise ValueError(f"unsupported integer chain-tree loop: {opcode}")
-    _, _, inner_opcode, left_opcode, right_opcode, root_opcode = opcode.split("_")
-    return inner_opcode, left_opcode, right_opcode, root_opcode
-
-
-def _verify_index_maps(op: LoopKernel, allocated: dict[int, TensorType]) -> None:
+def _verify_index_maps(op: LoopKernel, types: dict[int, TensorType]) -> None:
     for buffer, index_map in zip(op.inputs, op.input_maps, strict=True):
-        expected = _broadcast_index_map(allocated[buffer].shape, op.iteration_shape)
+        expected = _broadcast_index_map(types[buffer].shape, op.iteration_shape)
         if index_map != expected:
             raise ValueError("loop input index map does not match broadcasting semantics")
 

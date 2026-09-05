@@ -18,9 +18,14 @@ from typing import Any
 
 import numpy as np
 
-from .c_codegen import generate_c
+from . import native_cache_lock
+from .c_abi_codegen import generate_c
 from .input_validation import prepare_runtime_inputs
+from .ir import TensorType
 from .loop_ir import LoopProgram
+
+ExecutionResult = np.ndarray | tuple[np.ndarray, ...]
+NativeOutput = np.ndarray | Sequence[np.ndarray] | None
 
 
 class NativeCompilationError(RuntimeError):
@@ -59,11 +64,11 @@ class NativeExecutable:
     def execute(
         self,
         inputs: Sequence[Any] = (),
-        out: np.ndarray | None = None,
-    ) -> np.ndarray:
+        out: NativeOutput = None,
+    ) -> ExecutionResult:
         """Execute with exact runtime-input/output validation and cached native code."""
         runtime_inputs = prepare_runtime_inputs(self._program.input_types, inputs)
-        output = _prepare_native_output(self._program, out, runtime_inputs)
+        outputs = _prepare_native_outputs(self._program, out, runtime_inputs)
         command = list(self._command)
         with _NATIVE_CACHE_LOCK:
             artifact = _get_or_compile_artifact(
@@ -71,17 +76,19 @@ class NativeExecutable:
                 command,
                 self._persistent_library,
             )
-            return _execute_artifact(self._program, artifact, runtime_inputs, output)
+            return _execute_artifact(self._program, artifact, runtime_inputs, outputs)
 
     def __call__(
         self,
         inputs: Sequence[Any] = (),
-        out: np.ndarray | None = None,
-    ) -> np.ndarray:
+        out: NativeOutput = None,
+    ) -> ExecutionResult:
         return self.execute(inputs, out=out)
 
 
-_PERSISTENT_CACHE_SCHEMA = "native-v1"
+_PERSISTENT_CACHE_SCHEMA = "native-v2"
+_PERSISTENT_MANIFEST_NAME = "manifest.json"
+_persistent_cache_lease = native_cache_lock.persistent_cache_lease
 _NATIVE_CACHE: dict[tuple[tuple[str, ...], str, str | None], _NativeArtifact] = {}
 _NATIVE_CACHE_LOCK = threading.RLock()
 
@@ -112,18 +119,18 @@ def execute_native(
     compiler: str | None = None,
     inputs: Sequence[Any] = (),
     cache_dir: str | os.PathLike[str] | None = None,
-    out: np.ndarray | None = None,
-) -> np.ndarray:
+    out: NativeOutput = None,
+) -> ExecutionResult:
     """Compile or reuse generated C and execute it on the native CPU."""
     runtime_inputs = prepare_runtime_inputs(program.input_types, inputs)
-    output = _prepare_native_output(program, out, runtime_inputs)
+    outputs = _prepare_native_outputs(program, out, runtime_inputs)
     command = _compiler_command(compiler)
     source = generate_c(program)
     persistent_library = _persistent_library_path(cache_dir, source, command)
 
     with _NATIVE_CACHE_LOCK:
         artifact = _get_or_compile_artifact(source, command, persistent_library)
-        return _execute_artifact(program, artifact, runtime_inputs, output)
+        return _execute_artifact(program, artifact, runtime_inputs, outputs)
 
 
 def clear_native_cache() -> None:
@@ -142,32 +149,79 @@ def clear_native_cache() -> None:
             raise NativeCompilationError(f"failed to clear native artifact cache: {first_error}") from first_error
 
 
-def _prepare_native_output(
+def _prepare_native_outputs(
     program: LoopProgram,
+    output: NativeOutput,
+    runtime_inputs: Sequence[np.ndarray[Any, Any]],
+) -> tuple[np.ndarray, ...]:
+    return_types = _return_types(program)
+    output_count = len(return_types)
+
+    if output_count == 1:
+        if output is None or isinstance(output, np.ndarray):
+            candidates: tuple[np.ndarray | None, ...] = (output,)
+        else:
+            raise TypeError("output must be a numpy.ndarray")
+    else:
+        if output is None:
+            candidates = (None,) * output_count
+        elif isinstance(output, np.ndarray) or not isinstance(output, Sequence):
+            raise TypeError("multi-output program requires a sequence of numpy.ndarray outputs")
+        else:
+            candidates = tuple(output)
+            if len(candidates) != output_count:
+                raise ValueError(
+                    f"multi-output program requires {output_count} output arrays, got {len(candidates)}"
+                )
+
+    outputs = tuple(
+        _prepare_native_output_array(
+            return_type,
+            candidate,
+            runtime_inputs,
+            label="output" if output_count == 1 else f"output {index}",
+        )
+        for index, (return_type, candidate) in enumerate(
+            zip(return_types, candidates, strict=True)
+        )
+    )
+
+    for left_index, left in enumerate(outputs):
+        for right_index in range(left_index + 1, len(outputs)):
+            if np.shares_memory(left, outputs[right_index]):
+                raise ValueError(
+                    f"outputs {left_index} and {right_index} must not overlap"
+                )
+    return outputs
+
+
+def _prepare_native_output_array(
+    return_type: TensorType,
     output: np.ndarray | None,
     runtime_inputs: Sequence[np.ndarray[Any, Any]],
+    *,
+    label: str,
 ) -> np.ndarray:
-    return_type = _return_type(program)
     expected_dtype = np.dtype(return_type.dtype.to_numpy())
     if output is None:
         return np.empty(return_type.shape, dtype=expected_dtype)
     if not isinstance(output, np.ndarray):
-        raise TypeError("output must be a numpy.ndarray")
+        raise TypeError(f"{label} must be a numpy.ndarray")
     if tuple(output.shape) != return_type.shape:
         raise ValueError(
-            f"output shape {tuple(output.shape)} does not match expected {return_type.shape}"
+            f"{label} shape {tuple(output.shape)} does not match expected {return_type.shape}"
         )
     if output.dtype != expected_dtype:
-        raise ValueError(f"output dtype {output.dtype} does not match expected {expected_dtype}")
+        raise ValueError(f"{label} dtype {output.dtype} does not match expected {expected_dtype}")
     if not output.flags.c_contiguous:
-        raise ValueError("output must be C-contiguous")
+        raise ValueError(f"{label} must be C-contiguous")
     if not output.flags.writeable:
-        raise ValueError("output must be writable")
+        raise ValueError(f"{label} must be writable")
     if not output.flags.aligned:
-        raise ValueError("output must be aligned for its dtype")
+        raise ValueError(f"{label} must be aligned for its dtype")
     for index, runtime_input in enumerate(runtime_inputs):
         if np.shares_memory(output, runtime_input):
-            raise ValueError(f"output must not overlap runtime input {index}")
+            raise ValueError(f"{label} must not overlap runtime input {index}")
     return output
 
 
@@ -175,17 +229,22 @@ def _execute_artifact(
     program: LoopProgram,
     artifact: _NativeArtifact,
     runtime_inputs: Sequence[np.ndarray[Any, Any]],
-    output: np.ndarray,
-) -> np.ndarray:
-    return_type = _return_type(program)
-    output_pointer_type = _pointer_type(return_type.dtype.to_numpy())
+    outputs: tuple[np.ndarray, ...],
+) -> ExecutionResult:
+    return_types = _return_types(program)
+    output_pointer_types = tuple(
+        _pointer_type(return_type.dtype.to_numpy()) for return_type in return_types
+    )
     input_pointer_types = tuple(
         _pointer_type(input_type.dtype.to_numpy()) for input_type in program.input_types
     )
     runner = artifact.library.tiny_tensor_run
-    runner.argtypes = [output_pointer_type, *input_pointer_types]
+    runner.argtypes = [*output_pointer_types, *input_pointer_types]
     runner.restype = None
-    arguments = [output.ctypes.data_as(output_pointer_type)]
+    arguments = [
+        array.ctypes.data_as(pointer_type)
+        for array, pointer_type in zip(outputs, output_pointer_types, strict=True)
+    ]
     arguments.extend(
         array.ctypes.data_as(pointer_type)
         for array, pointer_type in zip(
@@ -195,7 +254,7 @@ def _execute_artifact(
         )
     )
     runner(*arguments)
-    return output
+    return outputs[0] if len(outputs) == 1 else outputs
 
 
 def _get_or_compile_artifact(
@@ -234,31 +293,45 @@ def _get_or_compile_persistent_artifact(
     command: list[str],
     library_path: Path,
 ) -> _NativeArtifact:
-    cached = _stage_existing_persistent_artifact(library_path)
-    if cached is not None:
-        return cached
-
-    schema_root = library_path.parent.parent
-    build_directory = Path(tempfile.mkdtemp(prefix=".build-", dir=schema_root))
     try:
-        compiled_library = _compile_source(source, command, build_directory)
-        library_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.replace(compiled_library, library_path)
-        except OSError as error:
-            concurrent = _stage_existing_persistent_artifact(library_path)
-            if concurrent is not None:
-                return concurrent
-            raise NativeCompilationError(
-                f"failed to publish persistent native artifact: {error}"
-            ) from error
+        with _persistent_cache_lease(library_path):
+            cached = _stage_existing_persistent_artifact(library_path)
+            if cached is not None:
+                return cached
 
-        staged = _stage_existing_persistent_artifact(library_path)
-        if staged is None:
-            raise NativeCompilationError("newly compiled persistent native artifact could not be loaded")
-        return staged
-    finally:
-        shutil.rmtree(build_directory, ignore_errors=True)
+            schema_root = library_path.parent.parent
+            build_directory = Path(tempfile.mkdtemp(prefix=".build-", dir=schema_root))
+            try:
+                compiled_library = _compile_source(source, command, build_directory)
+                compiled_manifest = build_directory / _PERSISTENT_MANIFEST_NAME
+                _write_persistent_manifest(
+                    compiled_manifest,
+                    library_path,
+                    _sha256_file(compiled_library),
+                )
+                library_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_path = _persistent_manifest_path(library_path)
+                try:
+                    os.replace(compiled_library, library_path)
+                    os.replace(compiled_manifest, manifest_path)
+                except OSError as error:
+                    _invalidate_persistent_entry(library_path)
+                    raise NativeCompilationError(
+                        f"failed to publish persistent native artifact: {error}"
+                    ) from error
+
+                staged = _stage_existing_persistent_artifact(library_path)
+                if staged is None:
+                    raise NativeCompilationError(
+                        "newly compiled persistent native artifact could not be loaded"
+                    )
+                return staged
+            finally:
+                shutil.rmtree(build_directory, ignore_errors=True)
+    except native_cache_lock.PersistentCacheLeaseError as error:
+        raise NativeCompilationError(
+            f"failed to acquire persistent native cache lease: {error}"
+        ) from error
 
 
 def _compile_source(source: str, command: list[str], directory_path: Path) -> Path:
@@ -289,7 +362,19 @@ def _load_library(library_path: Path) -> ctypes.CDLL:
 
 
 def _stage_existing_persistent_artifact(library_path: Path) -> _NativeArtifact | None:
-    if not library_path.is_file():
+    manifest_path = _persistent_manifest_path(library_path)
+    if not library_path.is_file() and not manifest_path.is_file():
+        return None
+    if not library_path.is_file() or not manifest_path.is_file():
+        _invalidate_persistent_entry(library_path)
+        return None
+
+    manifest = _read_persistent_manifest(manifest_path)
+    if not _persistent_manifest_matches(manifest, library_path):
+        _invalidate_persistent_entry(library_path)
+        return None
+    if manifest["library_sha256"] != _sha256_file(library_path):
+        _invalidate_persistent_entry(library_path)
         return None
 
     staging_directory = Path(tempfile.mkdtemp(prefix="tiny_tensor_compiler_cached_"))
@@ -304,9 +389,80 @@ def _stage_existing_persistent_artifact(library_path: Path) -> _NativeArtifact |
         library = _load_library(staged_library)
     except NativeCompilationError:
         shutil.rmtree(staging_directory, ignore_errors=True)
-        _remove_file(library_path)
+        _invalidate_persistent_entry(library_path)
         return None
     return _NativeArtifact(staging_directory, library)
+
+
+def _persistent_manifest_path(library_path: Path) -> Path:
+    return library_path.with_name(_PERSISTENT_MANIFEST_NAME)
+
+
+def _read_persistent_manifest(manifest_path: Path) -> dict[str, object] | None:
+    try:
+        parsed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def _persistent_manifest_matches(
+    manifest: dict[str, object] | None,
+    library_path: Path,
+) -> bool:
+    if manifest is None:
+        return False
+    expected = {
+        "schema": _PERSISTENT_CACHE_SCHEMA,
+        "digest": library_path.parent.name,
+        "library": library_path.name,
+    }
+    if any(manifest.get(key) != value for key, value in expected.items()):
+        return False
+    library_sha256 = manifest.get("library_sha256")
+    return (
+        isinstance(library_sha256, str)
+        and len(library_sha256) == 64
+        and all(character in "0123456789abcdef" for character in library_sha256)
+    )
+
+
+def _write_persistent_manifest(
+    manifest_path: Path,
+    library_path: Path,
+    library_sha256: str,
+) -> None:
+    manifest = {
+        "schema": _PERSISTENT_CACHE_SCHEMA,
+        "digest": library_path.parent.name,
+        "library": library_path.name,
+        "library_sha256": library_sha256,
+    }
+    try:
+        manifest_path.write_text(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as error:
+        raise NativeCompilationError(f"failed to write persistent native manifest: {error}") from error
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as error:
+        raise NativeCompilationError(f"failed to hash persistent native artifact: {error}") from error
+    return digest.hexdigest()
+
+
+def _invalidate_persistent_entry(library_path: Path) -> None:
+    _remove_file(_persistent_manifest_path(library_path))
+    _remove_file(library_path)
 
 
 def _persistent_library_path(
@@ -425,11 +581,12 @@ def _release_library(library: ctypes.CDLL) -> None:
         raise NativeCompilationError(f"failed to unload native shared library: Windows error {error}")
 
 
-def _return_type(program: LoopProgram):
-    for allocation in program.allocations:
-        if allocation.buffer == program.return_slot:
-            return allocation.type
-    raise RuntimeError("verified loop IR return buffer unexpectedly has no allocation")
+def _return_types(program: LoopProgram) -> tuple[TensorType, ...]:
+    types = program.value_types
+    try:
+        return tuple(types[slot] for slot in program.return_slots)
+    except KeyError as error:
+        raise RuntimeError("verified loop IR return value unexpectedly has no type") from error
 
 
 def _library_name() -> str:

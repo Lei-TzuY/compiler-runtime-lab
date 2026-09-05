@@ -5,14 +5,19 @@ import numpy as np
 from .ir import DType, Module, Operation, Value
 from .verifier import verify
 
-_PURE_OPCODES = frozenset({"const", "add", "mul", "relu"})
-_CSE_OPCODES = frozenset({"add", "mul", "relu"})
+_PURE_OPCODES = frozenset(
+    {"const", "add", "mul", "relu", "reshape", "view", "slice", "reverse", "transpose"}
+)
+_CSE_OPCODES = frozenset({"add", "mul", "relu", "reshape", "view"})
 _CANONICAL_COMMUTATIVE_OPCODES = frozenset({"add", "mul"})
+_EFFECT_OPCODES = frozenset({"copy_into"})
 
 
 def constant_fold(module: Module) -> int:
     """Fold constant add/mul/relu operations in place and return the number folded."""
     verify(module)
+    if _has_effects(module):
+        return 0
     function = module.function
     folded = 0
 
@@ -52,6 +57,8 @@ def constant_fold(module: Module) -> int:
 def algebraic_simplify(module: Module) -> int:
     """Remove exact integer add-zero and multiply-one identities in place."""
     verify(module)
+    if _has_effects(module):
+        return 0
     function = module.function
     simplified = 0
 
@@ -96,6 +103,8 @@ def dead_code_eliminate(module: Module) -> int:
 def common_subexpression_eliminate(module: Module) -> int:
     """Merge repeated exact pure expressions and return the number removed."""
     verify(module)
+    if _has_effects(module):
+        return 0
     function = module.function
     seen: dict[tuple[object, ...], Operation] = {}
     removed = 0
@@ -126,6 +135,8 @@ def common_subexpression_eliminate(module: Module) -> int:
 def canonicalize(module: Module) -> int:
     """Order integer commutative operands by current SSA definition order."""
     verify(module)
+    if _has_effects(module):
+        return 0
     function = module.function
     definition_rank: dict[Value, int] = {}
     next_rank = 0
@@ -155,6 +166,10 @@ def canonicalize(module: Module) -> int:
 
     verify(module)
     return changed
+
+
+def _has_effects(module: Module) -> bool:
+    return any(op.opcode in _EFFECT_OPCODES for op in module.function.ops)
 
 
 def _neutral_replacement(op: Operation) -> Value | None:

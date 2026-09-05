@@ -7,44 +7,26 @@ from typing import Any
 
 import numpy as np
 
+from .fused_expr import FusedExpression
 from .ir import DType, TensorType
-from .loop_ir import IndexMap, LoopAlloc, LoopInput, LoopKernel, LoopProgram, LoopReturn
-
-_BINARY_CHAIN_OPERATORS = {
-    "chain_add_add": ("+", "+"),
-    "chain_add_mul": ("+", "*"),
-    "chain_mul_add": ("*", "+"),
-    "chain_mul_mul": ("*", "*"),
-}
-_RELU_BINARY_CHAIN_OPCODES = frozenset(f"relu_{opcode}" for opcode in _BINARY_CHAIN_OPERATORS)
-_BINARY_TREE_OPERATORS = {
-    f"tree_{left}_{right}_{root}": (
-        "+" if left == "add" else "*",
-        "+" if right == "add" else "*",
-        "+" if root == "add" else "*",
-    )
-    for left in ("add", "mul")
-    for right in ("add", "mul")
-    for root in ("add", "mul")
-}
-_RELU_BINARY_TREE_OPCODES = frozenset(f"relu_{opcode}" for opcode in _BINARY_TREE_OPERATORS)
-_CHAIN_TREE_OPERATORS = {
-    f"chain_tree_{inner}_{left}_{right}_{root}": (
-        "+" if inner == "add" else "*",
-        "+" if left == "add" else "*",
-        "+" if right == "add" else "*",
-        "+" if root == "add" else "*",
-    )
-    for inner in ("add", "mul")
-    for left in ("add", "mul")
-    for right in ("add", "mul")
-    for root in ("add", "mul")
-}
+from .layout import StorageLayout
+from .loop_ir import (
+    IndexMap,
+    LoopAlloc,
+    LoopInput,
+    LoopKernel,
+    LoopProgram,
+    LoopReturn,
+    LoopView,
+    fused_expression_for_kernel,
+)
+from .simd_codegen import I32SSE2Plan, build_i32_sse2_plan, emit_i32_sse2_plan
 
 
 def generate_c(program: LoopProgram) -> str:
     """Generate deterministic C11 source for a verified explicit loop program."""
-    types = {op.buffer: op.type for op in program.allocations}
+    types = program.value_types
+    layouts = program.value_layouts
     return_type = types[program.return_slot]
     parameters = [f"{_c_type(return_type.dtype)} *out"]
     parameters.extend(
@@ -94,10 +76,17 @@ def generate_c(program: LoopProgram) -> str:
         if isinstance(op, LoopInput):
             lines.extend(_emit_input(op, types[op.output]))
             continue
-        if isinstance(op, LoopReturn):
-            lines.extend(_emit_return(op, types[op.buffer]))
+        if isinstance(op, LoopView):
+            root = program.storage_root(op.output)
+            offset = layouts[op.output].offset
+            pointer = f"p{root}" if offset == 0 else f"p{root} + {offset}"
+            lines.append(f"    const {_c_type(op.type.dtype)} *p{op.output} = {pointer};")
+            lines.append("")
             continue
-        lines.extend(_emit_kernel(op, types, kernel_number))
+        if isinstance(op, LoopReturn):
+            lines.extend(_emit_return_copy(op.buffer, types[op.buffer], layouts[op.buffer], "out"))
+            continue
+        lines.extend(_emit_kernel(op, types, kernel_number, layouts=layouts))
         kernel_number += 1
 
     lines.append("}")
@@ -118,7 +107,11 @@ def _emit_kernel(
     op: LoopKernel,
     types: dict[int, TensorType],
     kernel_number: int,
+    *,
+    layouts: dict[int, StorageLayout] | None = None,
 ) -> list[str]:
+    if layouts is None:
+        layouts = {buffer: StorageLayout.contiguous(type_.shape) for buffer, type_ in types.items()}
     output_type = types[op.output]
     lines = ["    {"]
 
@@ -134,13 +127,37 @@ def _emit_kernel(
             f"[{max(1, flat.size)}] = {{{values}}};"
         )
 
-    if _can_emit_sse2_i32(op, types):
-        lines.extend(_emit_sse2_i32(op, output_type))
+    if op.opcode == "reshape":
+        if len(op.inputs) != 1:
+            raise RuntimeError("verified reshape loop unexpectedly has invalid arity")
+        source = op.inputs[0]
+        source_ref = _linear_input_ref(source, types[source], layouts[source], "n")
+        lines.extend(
+            [
+                "        TINY_TENSOR_VECTORIZE_LOOP",
+                f"        for (int64_t n = 0; n < {_element_count(output_type)}; ++n) {{",
+                f"            p{op.output}[n] = {source_ref};",
+                "        }",
+                "    }",
+                "",
+            ]
+        )
+        return lines
+
+    sse2_plan = _select_i32_sse2_plan(op, types, layouts=layouts)
+    if sse2_plan is not None:
+        lines.extend(
+            emit_i32_sse2_plan(
+                sse2_plan,
+                output=op.output,
+                count=_element_count(output_type),
+            )
+        )
         lines.append("    }")
         lines.append("")
         return lines
 
-    linearized = _can_linearize_kernel(op, types)
+    linearized = _can_linearize_kernel(op, types, layouts=layouts)
     indent = "        "
     if linearized:
         lines.append(f"{indent}TINY_TENSOR_VECTORIZE_LOOP")
@@ -163,7 +180,7 @@ def _emit_kernel(
         buffer = op.inputs[position]
         if linearized:
             return f"p{buffer}[n]"
-        return _input_ref(buffer, op.input_maps[position], types[buffer])
+        return _input_ref(buffer, op.input_maps[position], layouts[buffer])
 
     if op.opcode == "const":
         if op.literal is None:
@@ -195,81 +212,19 @@ def _emit_kernel(
         operator = "+" if op.opcode == "relu_add" else "*"
         lines.append(f"{indent}{c_type} value = (({c_type}){lhs} {operator} ({c_type}){rhs});")
         lines.extend(_emit_relu_assignment(output_ref, output_type.dtype, zero, indent))
-    elif op.opcode in _BINARY_CHAIN_OPERATORS or op.opcode in _RELU_BINARY_CHAIN_OPCODES:
-        lhs = input_ref(0)
-        rhs = input_ref(1)
-        tail = input_ref(2)
-        c_type = _c_type(output_type.dtype)
-        relu_chain = op.opcode in _RELU_BINARY_CHAIN_OPCODES
-        chain_opcode = op.opcode.removeprefix("relu_")
-        inner_operator, outer_operator = _BINARY_CHAIN_OPERATORS[chain_opcode]
-        lines.append(
-            f"{indent}{c_type} inner = (({c_type}){lhs} {inner_operator} ({c_type}){rhs});"
-        )
-        if relu_chain:
-            zero = _zero_literal(output_type.dtype)
-            lines.append(
-                f"{indent}{c_type} value = (({c_type})inner {outer_operator} ({c_type}){tail});"
-            )
-            lines.extend(_emit_relu_assignment(output_ref, output_type.dtype, zero, indent))
-        else:
-            lines.append(
-                f"{indent}{output_ref} = (({c_type})inner {outer_operator} ({c_type}){tail});"
-            )
-    elif op.opcode in _BINARY_TREE_OPERATORS or op.opcode in _RELU_BINARY_TREE_OPCODES:
-        left_lhs = input_ref(0)
-        left_rhs = input_ref(1)
-        right_lhs = input_ref(2)
-        right_rhs = input_ref(3)
-        c_type = _c_type(output_type.dtype)
-        relu_tree = op.opcode in _RELU_BINARY_TREE_OPCODES
-        tree_opcode = op.opcode.removeprefix("relu_")
-        left_operator, right_operator, root_operator = _BINARY_TREE_OPERATORS[tree_opcode]
-        lines.append(
-            f"{indent}{c_type} left = "
-            f"(({c_type}){left_lhs} {left_operator} ({c_type}){left_rhs});"
-        )
-        lines.append(
-            f"{indent}{c_type} right = "
-            f"(({c_type}){right_lhs} {right_operator} ({c_type}){right_rhs});"
-        )
-        if relu_tree:
-            zero = _zero_literal(output_type.dtype)
-            lines.append(
-                f"{indent}{c_type} value = (({c_type})left {root_operator} ({c_type})right);"
-            )
-            lines.extend(_emit_relu_assignment(output_ref, output_type.dtype, zero, indent))
-        else:
-            lines.append(
-                f"{indent}{output_ref} = (({c_type})left {root_operator} ({c_type})right);"
-            )
-    elif op.opcode in _CHAIN_TREE_OPERATORS:
-        first_lhs = input_ref(0)
-        first_rhs = input_ref(1)
-        left_tail = input_ref(2)
-        right_lhs = input_ref(3)
-        right_rhs = input_ref(4)
-        c_type = _c_type(output_type.dtype)
-        inner_operator, left_operator, right_operator, root_operator = _CHAIN_TREE_OPERATORS[
-            op.opcode
-        ]
-        lines.append(
-            f"{indent}{c_type} inner = "
-            f"(({c_type}){first_lhs} {inner_operator} ({c_type}){first_rhs});"
-        )
-        lines.append(
-            f"{indent}{c_type} left = "
-            f"(({c_type})inner {left_operator} ({c_type}){left_tail});"
-        )
-        lines.append(
-            f"{indent}{c_type} right = "
-            f"(({c_type}){right_lhs} {right_operator} ({c_type}){right_rhs});"
-        )
-        lines.append(
-            f"{indent}{output_ref} = (({c_type})left {root_operator} ({c_type})right);"
-        )
     else:
-        raise RuntimeError(f"unsupported verified loop kernel: {op.opcode}")
+        expression = fused_expression_for_kernel(op)
+        if expression is None:
+            raise RuntimeError(f"unsupported verified loop kernel: {op.opcode}")
+        lines.extend(
+            _emit_fused_expression(
+                expression,
+                output_ref=output_ref,
+                output_type=output_type,
+                input_ref=input_ref,
+                indent=indent,
+            )
+        )
 
     for _ in range(loop_depth):
         indent = indent[:-4]
@@ -279,209 +234,85 @@ def _emit_kernel(
     return lines
 
 
-def _can_emit_sse2_i32(op: LoopKernel, types: dict[int, TensorType]) -> bool:
-    return (
-        op.opcode in {
-            "add",
-            "relu",
-            "relu_add",
-            "chain_add_add",
-            "relu_chain_add_add",
-            "tree_add_add_add",
-        }
-        and types[op.output].dtype == DType.INT32
-        and all(types[buffer].dtype == DType.INT32 for buffer in op.inputs)
-        and _can_linearize_kernel(op, types)
-    )
+def _emit_fused_expression(
+    expression: FusedExpression,
+    *,
+    output_ref: str,
+    output_type: TensorType,
+    input_ref: Any,
+    indent: str,
+) -> list[str]:
+    refs = {
+        name: input_ref(position)
+        for position, name in enumerate(expression.input_names)
+    }
+    c_type = _c_type(output_type.dtype)
+    lines: list[str] = []
 
+    for step in expression.steps:
+        if step.opcode == "relu":
+            operand = refs[step.inputs[0]]
+            if operand != "value":
+                lines.append(f"{indent}{c_type} value = ({c_type}){operand};")
+            lines.extend(
+                _emit_relu_assignment(
+                    output_ref,
+                    output_type.dtype,
+                    _zero_literal(output_type.dtype),
+                    indent,
+                )
+            )
+            refs[step.output] = output_ref
+            continue
 
-def _emit_sse2_i32(op: LoopKernel, output_type: TensorType) -> list[str]:
-    if op.opcode == "relu":
-        return _emit_sse2_i32_relu(op, output_type)
-    if op.opcode in {"chain_add_add", "relu_chain_add_add"}:
-        return _emit_sse2_i32_chain_add_add(op, output_type)
-    if op.opcode == "tree_add_add_add":
-        return _emit_sse2_i32_tree_add_add_add(op, output_type)
+        lhs, rhs = step.inputs
+        operator = "+" if step.opcode == "add" else "*"
+        expression_text = (
+            f"(({c_type}){refs[lhs]} {operator} ({c_type}){refs[rhs]})"
+        )
+        if step.output == expression.result:
+            lines.append(f"{indent}{output_ref} = {expression_text};")
+            refs[step.output] = output_ref
+        else:
+            lines.append(f"{indent}{c_type} {step.output} = {expression_text};")
+            refs[step.output] = step.output
 
-    lhs, rhs = op.inputs
-    count = _element_count(output_type)
-    output = op.output
-    relu = op.opcode == "relu_add"
-    lines = [
-        "        #if TINY_TENSOR_HAS_SSE2",
-        "        int64_t n = 0;",
-        f"        for (; n + 4 <= {count}; n += 4) {{",
-        f"            __m128i lhs = _mm_loadu_si128((const __m128i *)&p{lhs}[n]);",
-        f"            __m128i rhs = _mm_loadu_si128((const __m128i *)&p{rhs}[n]);",
-        "            __m128i sum = _mm_add_epi32(lhs, rhs);",
-    ]
-    if relu:
-        lines.extend(
-            [
-                "            __m128i zero = _mm_setzero_si128();",
-                "            __m128i positive = _mm_cmpgt_epi32(sum, zero);",
-                "            __m128i relu = _mm_and_si128(sum, positive);",
-                f"            _mm_storeu_si128((__m128i *)&p{output}[n], relu);",
-            ]
-        )
-    else:
-        lines.append(f"            _mm_storeu_si128((__m128i *)&p{output}[n], sum);")
-    lines.extend(["        }", f"        for (; n < {count}; ++n) {{"])
-    if relu:
-        lines.extend(
-            [
-                f"            int32_t value = ((int32_t)p{lhs}[n] + (int32_t)p{rhs}[n]);",
-                f"            p{output}[n] = value < 0 ? 0 : value;",
-            ]
-        )
-    else:
-        lines.append(f"            p{output}[n] = ((int32_t)p{lhs}[n] + (int32_t)p{rhs}[n]);")
-    lines.extend(["        }", "        #else", "        TINY_TENSOR_VECTORIZE_LOOP"])
-    lines.append(f"        for (int64_t n = 0; n < {count}; ++n) {{")
-    if relu:
-        lines.extend(
-            [
-                f"            int32_t value = ((int32_t)p{lhs}[n] + (int32_t)p{rhs}[n]);",
-                f"            p{output}[n] = value < 0 ? 0 : value;",
-            ]
-        )
-    else:
-        lines.append(f"            p{output}[n] = ((int32_t)p{lhs}[n] + (int32_t)p{rhs}[n]);")
-    lines.extend(["        }", "        #endif"])
     return lines
 
 
-def _emit_sse2_i32_chain_add_add(op: LoopKernel, output_type: TensorType) -> list[str]:
-    lhs, rhs, tail = op.inputs
-    count = _element_count(output_type)
-    output = op.output
-    relu = op.opcode == "relu_chain_add_add"
-    lines = [
-        "        #if TINY_TENSOR_HAS_SSE2",
-        "        int64_t n = 0;",
-        f"        for (; n + 4 <= {count}; n += 4) {{",
-        f"            __m128i lhs = _mm_loadu_si128((const __m128i *)&p{lhs}[n]);",
-        f"            __m128i rhs = _mm_loadu_si128((const __m128i *)&p{rhs}[n]);",
-        f"            __m128i tail = _mm_loadu_si128((const __m128i *)&p{tail}[n]);",
-        "            __m128i inner = _mm_add_epi32(lhs, rhs);",
-        "            __m128i result = _mm_add_epi32(inner, tail);",
-    ]
-    if relu:
-        lines.extend(
-            [
-                "            __m128i zero = _mm_setzero_si128();",
-                "            __m128i positive = _mm_cmpgt_epi32(result, zero);",
-                "            __m128i relu = _mm_and_si128(result, positive);",
-                f"            _mm_storeu_si128((__m128i *)&p{output}[n], relu);",
-            ]
-        )
-    else:
-        lines.append(f"            _mm_storeu_si128((__m128i *)&p{output}[n], result);")
-    lines.extend(
-        [
-            "        }",
-            f"        for (; n < {count}; ++n) {{",
-            f"            int32_t inner = ((int32_t)p{lhs}[n] + (int32_t)p{rhs}[n]);",
-        ]
-    )
-    if relu:
-        lines.extend(
-            [
-                f"            int32_t value = ((int32_t)inner + (int32_t)p{tail}[n]);",
-                f"            p{output}[n] = value < 0 ? 0 : value;",
-            ]
-        )
-    else:
-        lines.append(f"            p{output}[n] = ((int32_t)inner + (int32_t)p{tail}[n]);")
-    lines.extend(
-        [
-            "        }",
-            "        #else",
-            "        TINY_TENSOR_VECTORIZE_LOOP",
-            f"        for (int64_t n = 0; n < {count}; ++n) {{",
-            f"            int32_t inner = ((int32_t)p{lhs}[n] + (int32_t)p{rhs}[n]);",
-        ]
-    )
-    if relu:
-        lines.extend(
-            [
-                f"            int32_t value = ((int32_t)inner + (int32_t)p{tail}[n]);",
-                f"            p{output}[n] = value < 0 ? 0 : value;",
-            ]
-        )
-    else:
-        lines.append(f"            p{output}[n] = ((int32_t)inner + (int32_t)p{tail}[n]);")
-    lines.extend(["        }", "        #endif"])
-    return lines
+def _select_i32_sse2_plan(
+    op: LoopKernel,
+    types: dict[int, TensorType],
+    *,
+    layouts: dict[int, StorageLayout] | None = None,
+) -> I32SSE2Plan | None:
+    plan = build_i32_sse2_plan(op)
+    if plan is None:
+        return None
+    if types[op.output].dtype != DType.INT32:
+        return None
+    if any(types[buffer].dtype != DType.INT32 for buffer in op.inputs):
+        return None
+    if not _can_linearize_kernel(op, types, layouts=layouts):
+        return None
+    return plan
 
 
-def _emit_sse2_i32_tree_add_add_add(op: LoopKernel, output_type: TensorType) -> list[str]:
-    a, b, c, d = op.inputs
-    count = _element_count(output_type)
-    output = op.output
-    return [
-        "        #if TINY_TENSOR_HAS_SSE2",
-        "        int64_t n = 0;",
-        f"        for (; n + 4 <= {count}; n += 4) {{",
-        f"            __m128i a = _mm_loadu_si128((const __m128i *)&p{a}[n]);",
-        f"            __m128i b = _mm_loadu_si128((const __m128i *)&p{b}[n]);",
-        f"            __m128i c = _mm_loadu_si128((const __m128i *)&p{c}[n]);",
-        f"            __m128i d = _mm_loadu_si128((const __m128i *)&p{d}[n]);",
-        "            __m128i left = _mm_add_epi32(a, b);",
-        "            __m128i right = _mm_add_epi32(c, d);",
-        "            __m128i result = _mm_add_epi32(left, right);",
-        f"            _mm_storeu_si128((__m128i *)&p{output}[n], result);",
-        "        }",
-        f"        for (; n < {count}; ++n) {{",
-        f"            int32_t left = ((int32_t)p{a}[n] + (int32_t)p{b}[n]);",
-        f"            int32_t right = ((int32_t)p{c}[n] + (int32_t)p{d}[n]);",
-        f"            p{output}[n] = ((int32_t)left + (int32_t)right);",
-        "        }",
-        "        #else",
-        "        TINY_TENSOR_VECTORIZE_LOOP",
-        f"        for (int64_t n = 0; n < {count}; ++n) {{",
-        f"            int32_t left = ((int32_t)p{a}[n] + (int32_t)p{b}[n]);",
-        f"            int32_t right = ((int32_t)p{c}[n] + (int32_t)p{d}[n]);",
-        f"            p{output}[n] = ((int32_t)left + (int32_t)right);",
-        "        }",
-        "        #endif",
-    ]
-
-
-def _emit_sse2_i32_relu(op: LoopKernel, output_type: TensorType) -> list[str]:
-    (operand,) = op.inputs
-    count = _element_count(output_type)
-    output = op.output
-    return [
-        "        #if TINY_TENSOR_HAS_SSE2",
-        "        int64_t n = 0;",
-        f"        for (; n + 4 <= {count}; n += 4) {{",
-        f"            __m128i value = _mm_loadu_si128((const __m128i *)&p{operand}[n]);",
-        "            __m128i zero = _mm_setzero_si128();",
-        "            __m128i positive = _mm_cmpgt_epi32(value, zero);",
-        "            __m128i relu = _mm_and_si128(value, positive);",
-        f"            _mm_storeu_si128((__m128i *)&p{output}[n], relu);",
-        "        }",
-        f"        for (; n < {count}; ++n) {{",
-        f"            int32_t value = (int32_t)p{operand}[n];",
-        f"            p{output}[n] = value < 0 ? 0 : value;",
-        "        }",
-        "        #else",
-        "        TINY_TENSOR_VECTORIZE_LOOP",
-        f"        for (int64_t n = 0; n < {count}; ++n) {{",
-        f"            int32_t value = (int32_t)p{operand}[n];",
-        f"            p{output}[n] = value < 0 ? 0 : value;",
-        "        }",
-        "        #endif",
-    ]
-
-
-def _can_linearize_kernel(op: LoopKernel, types: dict[int, TensorType]) -> bool:
+def _can_linearize_kernel(
+    op: LoopKernel,
+    types: dict[int, TensorType],
+    *,
+    layouts: dict[int, StorageLayout] | None = None,
+) -> bool:
     if not op.iteration_shape or _element_count(types[op.output]) == 0:
         return False
+    if layouts is None:
+        layouts = {buffer: StorageLayout.contiguous(type_.shape) for buffer, type_ in types.items()}
     identity = tuple(range(len(op.iteration_shape)))
     return all(
-        types[buffer].shape == op.iteration_shape and index_map.axes == identity
+        types[buffer].shape == op.iteration_shape
+        and index_map.axes == identity
+        and layouts[buffer].is_contiguous(types[buffer].shape)
         for buffer, index_map in zip(op.inputs, op.input_maps, strict=True)
     )
 
@@ -503,31 +334,103 @@ def _emit_relu_assignment(output_ref: str, dtype: DType, zero: str, indent: str)
     return [f"{indent}{output_ref} = value < {zero} ? {zero} : value;"]
 
 
-def _emit_return(op: LoopReturn, type_: TensorType) -> list[str]:
+def _emit_return_copy(
+    buffer: int,
+    type_: TensorType,
+    layout: StorageLayout,
+    output_name: str,
+) -> list[str]:
     count = _element_count(type_)
-    if type_.shape:
+    if not type_.shape:
+        return [f"    {output_name}[0] = p{buffer}[0];"]
+    if layout.is_contiguous(type_.shape):
         return [
             f"    for (int64_t r = 0; r < {count}; ++r) {{",
-            f"        out[r] = p{op.buffer}[r];",
+            f"        {output_name}[r] = p{buffer}[r];",
             "    }",
         ]
-    return [f"    out[0] = p{op.buffer}[0];"]
+
+    lines: list[str] = []
+    indent = "    "
+    for axis, bound in enumerate(type_.shape):
+        lines.append(f"{indent}for (int64_t r{axis} = 0; r{axis} < {bound}; ++r{axis}) {{")
+        indent += "    "
+    source_offset = _stride_offset(tuple(range(len(type_.shape))), layout.strides, prefix="r")
+    output_offset = _flat_offset(tuple(range(len(type_.shape))), type_.shape, prefix="r")
+    lines.append(f"{indent}{output_name}[{output_offset}] = p{buffer}[{source_offset}];")
+    for _ in type_.shape:
+        indent = indent[:-4]
+        lines.append(f"{indent}}}")
+    return lines
 
 
-def _input_ref(buffer: int, index_map: IndexMap, type_: TensorType) -> str:
-    return f"p{buffer}[{_flat_offset(index_map.axes, type_.shape)}]"
+def _input_ref(buffer: int, index_map: IndexMap, layout: StorageLayout) -> str:
+    return f"p{buffer}[{_stride_offset(index_map.axes, layout.strides)}]"
 
 
-def _flat_offset(axes: tuple[int | None, ...], shape: tuple[int, ...]) -> str:
+def _linear_input_ref(
+    buffer: int,
+    type_: TensorType,
+    layout: StorageLayout,
+    linear_index: str,
+) -> str:
+    if layout.is_contiguous(type_.shape):
+        return f"p{buffer}[{linear_index}]"
+    terms: list[str] = []
+    logical_strides = StorageLayout.contiguous(type_.shape).strides
+    for axis, (dim, logical_stride, physical_stride) in enumerate(
+        zip(type_.shape, logical_strides, layout.strides, strict=True)
+    ):
+        if dim <= 1:
+            continue
+        coordinate = (
+            f"(({linear_index} / {logical_stride}) % {dim})"
+            if logical_stride != 1
+            else f"({linear_index} % {dim})"
+        )
+        if physical_stride == 1:
+            terms.append(coordinate)
+        else:
+            terms.append(f"({coordinate} * {physical_stride})")
+    offset = " + ".join(terms) if terms else "0"
+    return f"p{buffer}[{offset}]"
+
+
+def _flat_offset(
+    axes: tuple[int | None, ...],
+    shape: tuple[int, ...],
+    *,
+    prefix: str = "i",
+) -> str:
     terms: list[str] = []
     for input_axis, output_axis in enumerate(axes):
         if output_axis is None:
             continue
         stride = reduce(mul, shape[input_axis + 1 :], 1)
+        index = f"{prefix}{output_axis}"
         if stride == 1:
-            terms.append(f"i{output_axis}")
+            terms.append(index)
         else:
-            terms.append(f"(i{output_axis} * {stride})")
+            terms.append(f"({index} * {stride})")
+    return " + ".join(terms) if terms else "0"
+
+
+def _stride_offset(
+    axes: tuple[int | None, ...],
+    strides: tuple[int, ...],
+    *,
+    prefix: str = "i",
+) -> str:
+    terms: list[str] = []
+    for input_axis, output_axis in enumerate(axes):
+        if output_axis is None:
+            continue
+        stride = strides[input_axis]
+        index = f"{prefix}{output_axis}"
+        if stride == 1:
+            terms.append(index)
+        else:
+            terms.append(f"({index} * {stride})")
     return " + ".join(terms) if terms else "0"
 
 

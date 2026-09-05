@@ -7,13 +7,16 @@ import numpy as np
 
 from .input_validation import prepare_runtime_inputs
 from .ir import Module, Value
+from .symbolic import has_symbolic_shapes, specialize_for_inputs
 from .verifier import verify
 
 ExecutionResult = np.ndarray | tuple[np.ndarray, ...]
 
 
 def execute_reference(module: Module, inputs: Sequence[Any] = ()) -> ExecutionResult:
-    """Execute verified tensor IR directly; used as a semantic reference backend."""
+    """Execute verified tensor IR directly; symbolic shapes specialize from inputs."""
+    if has_symbolic_shapes(module):
+        module, _ = specialize_for_inputs(module, inputs)
     verify(module)
     input_ops = tuple(op for op in module.function.ops if op.opcode == "input")
     runtime_inputs = prepare_runtime_inputs(
@@ -37,6 +40,46 @@ def execute_reference(module: Module, inputs: Sequence[Any] = ()) -> ExecutionRe
             dtype = op.results[0].type.dtype.to_numpy()
             operand = values[op.operands[0]].astype(dtype, copy=False)
             values[op.results[0]] = np.maximum(operand, np.array(0, dtype=dtype))
+        elif op.opcode == "reshape":
+            operand = values[op.operands[0]]
+            values[op.results[0]] = np.array(
+                np.reshape(operand, op.results[0].type.shape, order="C"),
+                copy=True,
+            )
+        elif op.opcode == "view":
+            operand = values[op.operands[0]]
+            viewed = np.reshape(operand, op.results[0].type.shape, order="C")
+            if viewed.size and not np.shares_memory(viewed, operand):
+                raise RuntimeError("verified contiguous view unexpectedly required a copy")
+            values[op.results[0]] = viewed
+        elif op.opcode == "slice":
+            operand = values[op.operands[0]]
+            index = [slice(None)] * operand.ndim
+            index[op.attrs["axis"]] = slice(
+                op.attrs["start"], op.attrs["stop"], op.attrs["step"]
+            )
+            viewed = operand[tuple(index)]
+            if viewed.size and not np.shares_memory(viewed, operand):
+                raise RuntimeError("verified positive-stride slice unexpectedly required a copy")
+            values[op.results[0]] = viewed
+        elif op.opcode == "reverse":
+            operand = values[op.operands[0]]
+            viewed = np.flip(operand, axis=op.attrs["axis"])
+            if viewed.size and not np.shares_memory(viewed, operand):
+                raise RuntimeError("verified reverse unexpectedly required a copy")
+            values[op.results[0]] = viewed
+        elif op.opcode == "transpose":
+            operand = values[op.operands[0]]
+            viewed = np.transpose(operand, axes=op.attrs["axes"])
+            if viewed.size and not np.shares_memory(viewed, operand):
+                raise RuntimeError("verified transpose unexpectedly required a copy")
+            values[op.results[0]] = viewed
+        elif op.opcode == "copy_into":
+            root = values[op.operands[0]]
+            target = values[op.operands[1]]
+            source = values[op.operands[2]]
+            np.copyto(target, source)
+            values[op.results[0]] = root
         elif op.opcode == "return":
             outputs = tuple(np.array(values[operand], copy=True) for operand in op.operands)
             return outputs[0] if len(outputs) == 1 else outputs

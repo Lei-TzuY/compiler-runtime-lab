@@ -5,8 +5,18 @@ from typing import Any
 
 import numpy as np
 
-from .inference import TypeInferenceError, infer_binary, infer_relu
-from .ir import DType, Function, Module, TensorType, Value
+from .inference import (
+    TypeInferenceError,
+    infer_binary,
+    infer_relu,
+    infer_reshape,
+    infer_reverse,
+    infer_slice,
+    infer_transpose,
+)
+from .ir import DType, Function, Module, ShapeDim, TensorType, Value
+
+_ALIAS_OPCODES = frozenset({"view", "slice", "reverse", "transpose"})
 
 
 class Tensor:
@@ -33,6 +43,32 @@ class Tensor:
     def relu(self) -> Tensor:
         return self._builder.relu(self)
 
+    def reshape(self, shape: Iterable[ShapeDim]) -> Tensor:
+        return self._builder.reshape(self, shape)
+
+    def view(self, shape: Iterable[ShapeDim]) -> Tensor:
+        return self._builder.view(self, shape)
+
+    def slice(
+        self,
+        *,
+        axis: int,
+        start: int = 0,
+        stop: int | None = None,
+        step: int = 1,
+    ) -> Tensor:
+        return self._builder.slice(self, axis=axis, start=start, stop=stop, step=step)
+
+    def reverse(self, axis: int) -> Tensor:
+        return self._builder.reverse(self, axis)
+
+    def transpose(self, axes: Iterable[int] | None = None) -> Tensor:
+        return self._builder.transpose(self, axes)
+
+    def copy_into(self, target: Tensor, source: Tensor) -> Tensor:
+        """Copy ``source`` into one alias region of this fresh internal root generation."""
+        return self._builder.copy_into(self, target, source)
+
 
 class GraphBuilder:
     def __init__(self, name: str = "main") -> None:
@@ -42,7 +78,7 @@ class GraphBuilder:
 
     def input(
         self,
-        shape: Iterable[int],
+        shape: Iterable[ShapeDim],
         dtype: str | np.dtype[Any] | DType,
     ) -> Tensor:
         self._ensure_open()
@@ -94,6 +130,128 @@ class GraphBuilder:
         )
         return Tensor(self, op.results[0])
 
+    def reshape(self, tensor: Tensor, shape: Iterable[ShapeDim]) -> Tensor:
+        self._ensure_open()
+        self._check_tensor_owner(tensor)
+        result_type = infer_reshape(tensor.type, shape)
+        op = self.function.add_op(
+            "reshape",
+            operands=[tensor.value],
+            result_types=[result_type],
+        )
+        return Tensor(self, op.results[0])
+
+    def view(self, tensor: Tensor, shape: Iterable[ShapeDim]) -> Tensor:
+        self._ensure_open()
+        self._check_tensor_owner(tensor)
+        result_type = infer_reshape(tensor.type, shape)
+        op = self.function.add_op(
+            "view",
+            operands=[tensor.value],
+            result_types=[result_type],
+        )
+        return Tensor(self, op.results[0])
+
+    def slice(
+        self,
+        tensor: Tensor,
+        *,
+        axis: int,
+        start: int = 0,
+        stop: int | None = None,
+        step: int = 1,
+    ) -> Tensor:
+        self._ensure_open()
+        self._check_tensor_owner(tensor)
+        if (
+            not isinstance(axis, int)
+            or isinstance(axis, bool)
+            or axis < 0
+            or axis >= len(tensor.type.shape)
+        ):
+            raise TypeInferenceError("slice axis is out of range")
+        extent = tensor.type.shape[axis]
+        if not isinstance(extent, int) or isinstance(extent, bool):
+            raise TypeInferenceError("slice axis extent must be concrete before slicing")
+        normalized_stop = extent if stop is None else stop
+        result_type = infer_slice(
+            tensor.type,
+            axis=axis,
+            start=start,
+            stop=normalized_stop,
+            step=step,
+        )
+        op = self.function.add_op(
+            "slice",
+            operands=[tensor.value],
+            result_types=[result_type],
+            attrs={
+                "axis": axis,
+                "start": start,
+                "stop": normalized_stop,
+                "step": step,
+            },
+        )
+        return Tensor(self, op.results[0])
+
+    def reverse(self, tensor: Tensor, axis: int) -> Tensor:
+        self._ensure_open()
+        self._check_tensor_owner(tensor)
+        result_type = infer_reverse(tensor.type, axis)
+        op = self.function.add_op(
+            "reverse",
+            operands=[tensor.value],
+            result_types=[result_type],
+            attrs={"axis": axis},
+        )
+        return Tensor(self, op.results[0])
+
+    def transpose(self, tensor: Tensor, axes: Iterable[int] | None = None) -> Tensor:
+        self._ensure_open()
+        self._check_tensor_owner(tensor)
+        permutation = (
+            tuple(reversed(range(len(tensor.type.shape)))) if axes is None else tuple(axes)
+        )
+        result_type = infer_transpose(tensor.type, permutation)
+        op = self.function.add_op(
+            "transpose",
+            operands=[tensor.value],
+            result_types=[result_type],
+            attrs={"axes": permutation},
+        )
+        return Tensor(self, op.results[0])
+
+    def copy_into(self, root: Tensor, target: Tensor, source: Tensor) -> Tensor:
+        self._ensure_open()
+        for tensor in (root, target, source):
+            self._check_tensor_owner(tensor)
+
+        owner = _storage_root(root.value)
+        if not _is_full_root_handle(root.value):
+            raise ValueError("copy_into root must be an owning tensor or fresh full-root result")
+        producer = owner.producer
+        if producer is None or producer.opcode in {"input", "const"}:
+            raise ValueError("copy_into root must use internal computed storage")
+        if _storage_root(target.value) is not owner:
+            raise ValueError("copy_into target must alias the supplied root storage")
+        if target.type != source.type:
+            raise ValueError("copy_into target and source types must exactly match")
+        if _storage_root(source.value) is owner:
+            # Same-root writes have explicit snapshot semantics at the public builder
+            # boundary. Materialize the logical source in C order before mutating the
+            # owning root, so overlapping, interleaved, reversed, transposed, and
+            # unresolved-symbolic layouts all reduce to the existing different-root
+            # copy_into contract. The lower verifier/backend invariant therefore stays
+            # fail-closed rather than acquiring hidden memmove behavior.
+            source = self.reshape(source, source.type.shape)
+
+        op = self.function.add_op(
+            "copy_into",
+            operands=[root.value, target.value, source.value],
+            result_types=[root.type],
+        )
+        return Tensor(self, op.results[0])
+
     def finish(self, result: Tensor | Sequence[Tensor]) -> Module:
         self._ensure_open()
         if isinstance(result, Tensor):
@@ -142,3 +300,35 @@ class GraphBuilder:
     def _ensure_open(self) -> None:
         if self._finished:
             raise RuntimeError("graph has already been finished")
+
+
+def _is_full_root_handle(value: Value) -> bool:
+    owner = _storage_root(value)
+    if value is owner:
+        return True
+    producer = value.producer
+    return (
+        producer is not None
+        and producer.opcode == "copy_into"
+        and producer.results[0] is value
+        and value.type == owner.type
+    )
+
+
+def _storage_root(value: Value) -> Value:
+    current = value
+    seen: set[Value] = set()
+    while True:
+        if current in seen:
+            raise ValueError("tensor alias cycle detected")
+        seen.add(current)
+        producer = current.producer
+        if producer is None:
+            return current
+        if producer.opcode in _ALIAS_OPCODES:
+            current = producer.operands[0]
+            continue
+        if producer.opcode == "copy_into":
+            current = producer.operands[0]
+            continue
+        return current
