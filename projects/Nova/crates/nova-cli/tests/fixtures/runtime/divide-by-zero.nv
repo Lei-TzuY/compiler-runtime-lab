@@ -1,0 +1,7 @@
+fn zero() -> Int {
+    0
+}
+
+fn main() -> Int {
+    10 / zero()
+}

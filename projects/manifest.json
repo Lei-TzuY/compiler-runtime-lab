@@ -8,9 +8,15 @@
       "source_repository": "Lei-TzuY/Nova",
       "target_path": "projects/Nova",
       "observed_main_sha": "dcadc2238737b6f1e98887ab8fa658b23413d31b",
-      "status": "ready-for-import-prep",
+      "status": "imported-verified-pending-pr-merge",
       "blocker": null,
-      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
+      "imported_source_sha": "dcadc2238737b6f1e98887ab8fa658b23413d31b",
+      "verified_migration_branch_sha": "e725af64a9f05fd37acb51b969b01f635c20c37b",
+      "source_ci_run_id": 33920772855,
+      "verification_run_id": 33967555408,
+      "repository_hygiene_notes": "Frozen source contains README, Cargo.lock, Cargo workspace, docs, examples and rust-toolchain metadata but no top-level LICENSE file; migration preserves that source state rather than inventing licensing metadata.",
+      "integration_notes": "Nova is imported as an independently testable typed language/compiler/runtime project. No mini-language-server dependency is claimed until that project is separately imported and an explicit semantic/diagnostic interoperability test is added.",
+      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry, the imported subtree matched source blob-for-blob, and source-equivalent stable plus Rust 1.85 MSRV gates passed from the umbrella path."
     },
     {
       "name": "tiny-c-compiler",

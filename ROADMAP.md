@@ -11,11 +11,11 @@
 
 Before importing any project, establish an exact source commit and verify it again immediately before migration.
 
-- [ ] Nova — refresh exact `main`, open PRs, CI, attribution and repository hygiene.
+- [x] Nova — frozen at `dcadc2238737b6f1e98887ab8fa658b23413d31b`; exact source/open-PR/CI state, complete reachable-history attribution, tree equivalence, stable gates and Rust 1.85 MSRV passed.
 - [ ] tiny-c-compiler — resolve/accept bot co-author history policy before import.
-- [ ] sic-xe-assembler — finish or close the active implementation PR before migration.
+- [ ] sic-xe-assembler — recheck and resolve any active implementation PR before migration.
 - [x] mini-elf-toolchain — frozen at `3d452a8681bbfb092cd41465dba6f6eb97dfd224`; exact source/open-PR/CI/attribution gates passed immediately before import.
-- [ ] mini-language-server — refresh exact green source head and freeze import point.
+- [ ] mini-language-server — refresh exact green source head, open PRs, attribution and repository hygiene immediately before import.
 - [x] mini-debugger — frozen at `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a`; exact source/open-PR/CI state refreshed immediately before import and complete reachable-history attribution scan passed.
 - [x] mini-libc — frozen at `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`; exact source/open-PR/CI/attribution gates passed immediately before import.
 - [x] mini-wasm-runtime — frozen at `e923b27a2652aba88d50cdbb75d0fe959d40e457`; exact core CI, benchmark, differential, full reachable-history attribution, source-tree equivalence, stable and MSRV gates passed before publication.
@@ -46,8 +46,8 @@ Execution order:
 3. [x] `mini-debugger` — **IMPORTED / VERIFIED**
 4. [x] `tiny-tensor-compiler` — **IMPORTED / VERIFIED**
 5. [x] `mini-wasm-runtime` — **IMPORTED / VERIFIED**
-6. [ ] `Nova`
-7. [ ] `mini-language-server` immediately after Nova so their semantic boundary can be tested honestly
+6. [x] `Nova` — **IMPORTED / VERIFIED**
+7. [ ] `mini-language-server` — next, then verify the real bounded Nova semantic/diagnostic boundary
 8. [ ] `tiny-c-compiler` after attribution policy is resolved
 9. [ ] `sic-xe-assembler` after its active-PR state is rechecked and any blocker is resolved
 
@@ -63,7 +63,7 @@ For each remaining import:
 - [ ] run project tests/build/checks from the umbrella layout;
 - [ ] record verification evidence in `docs/MIGRATION.md`.
 
-Five imports now satisfy the reference process: `mini-elf-toolchain`, `mini-libc`, `mini-debugger`, `tiny-tensor-compiler`, and `mini-wasm-runtime` retain their selected source commits in umbrella ancestry, match their source trees, pass applicable project-native gates from the umbrella layout, and have permanent path-scoped CI.
+Six imports now satisfy the reference process: `mini-elf-toolchain`, `mini-libc`, `mini-debugger`, `tiny-tensor-compiler`, `mini-wasm-runtime`, and `Nova` retain their selected source commits in umbrella ancestry, match their source trees, pass applicable project-native gates from the umbrella layout, and have permanent path-scoped CI.
 
 ## Phase 3 — Umbrella integration
 
@@ -73,8 +73,9 @@ The umbrella is now actively testing composition rather than only storing indepe
 - [x] establish the first real cross-project bootstrap edge: pinned `tiny-c-compiler` → imported `mini-libc` → imported `mini-elf-toolchain` → executable;
 - [x] establish the second real cross-project edge: imported `mini-elf-toolchain` → sectionless ET_EXEC → imported `mini-debugger` → memory read + numeric breakpoint;
 - [x] preserve mini-wasm's external conformance boundary with Wasmtime differential testing, benchmark-policy smoke and deterministic parser fuzz smoke;
-- [ ] import Nova, then mini-language-server, and define only the semantic/diagnostic interoperability their real contracts support;
-- [ ] document the full cross-project dependency graph as additional projects are imported;
+- [x] import Nova as an independently verifiable language/compiler/runtime subtree;
+- [ ] import mini-language-server and define only the semantic/diagnostic interoperability its existing bounded Nova adapter and Nova's real syntax/diagnostics can support;
+- [ ] document the full cross-project dependency graph at the seven-project checkpoint;
 - [ ] define a common top-level developer entrypoint without forcing projects into one build system;
 - [ ] preserve project independence: each subtree should remain understandable and testable on its own.
 
@@ -122,20 +123,23 @@ Wasmtime differential reference
 deterministic fuzz smoke / benchmark-policy smoke
 ```
 
+Nova is now imported, but no Nova → mini-language-server edge is claimed yet. That edge becomes valid only after the language server is separately history-preserved and verified, then tested against concrete syntax/semantic/diagnostic cases shared with imported Nova. The target is a bounded interoperability contract, not a claim of a complete production Nova LSP.
+
 Remaining planned relationships include:
 
 ```text
-Nova → mini-language-server
+projects/Nova → projects/mini-language-server
 
 tiny-tensor-compiler → explicit object/static-runtime or executable-artifact handoff
 ```
 
 ## Phase 4 — Seven-project checkpoint
 
-After `Nova` and `mini-language-server` are imported and their applicable CI/integration is green:
+After `mini-language-server` is imported and its applicable CI/integration is green:
 
 - [ ] freeze a seven-project checkpoint in README/ledger;
 - [ ] verify umbrella `main` has zero open migration PRs and all path-scoped workflows are green;
+- [ ] record the bounded Nova ↔ mini-language-server semantic/diagnostic contract;
 - [ ] keep `tiny-c-compiler` and `sic-xe-assembler` as explicit pending exceptions if their blockers remain;
 - [ ] begin Phase 0 for `systems-lab` rather than extending compiler migration indefinitely.
 

@@ -8,9 +8,9 @@ This repository is intentionally being assembled with **history-preserving migra
 
 | Project | Role | Migration status |
 | --- | --- | --- |
-| [Nova](https://github.com/Lei-TzuY/Nova) | Typed language, semantic analysis, interpreter/runtime | READY FOR IMPORT PREP |
+| [Nova](projects/Nova) | Typed language, semantic analysis, interpreter/runtime | **IMPORTED / VERIFIED** |
 | [tiny-c-compiler](https://github.com/Lei-TzuY/tiny-c-compiler) | Self-contained x86-64 C compiler | ATTRIBUTION REVIEW |
-| [sic-xe-assembler](https://github.com/Lei-TzuY/sic-xe-assembler) | SIC/XE assembler and static-analysis tooling | HOLD — open implementation PR |
+| [sic-xe-assembler](https://github.com/Lei-TzuY/sic-xe-assembler) | SIC/XE assembler and static-analysis tooling | HOLD — recheck active implementation state |
 | [mini-elf-toolchain](projects/mini-elf-toolchain) | ELF/static-linking toolchain | **IMPORTED / VERIFIED** |
 | [mini-language-server](https://github.com/Lei-TzuY/mini-language-server) | Version-safe semantic/LSP tooling | READY FOR IMPORT PREP |
 | [mini-debugger](projects/mini-debugger) | ptrace-based debugger | **IMPORTED / VERIFIED** |
@@ -35,10 +35,10 @@ compiler-runtime-lab/
     ├── mini-debugger/           # imported + verified
     ├── tiny-tensor-compiler/    # imported + verified
     ├── mini-wasm-runtime/       # imported + verified
-    ├── Nova/                    # planned next
-    ├── mini-language-server/    # planned after Nova
+    ├── Nova/                    # imported + verified
+    ├── mini-language-server/    # next import
     ├── tiny-c-compiler/         # attribution review
-    └── sic-xe-assembler/        # hold: active PR
+    └── sic-xe-assembler/        # hold / recheck
 ```
 
 A planned project directory is created only by a verified history-preserving import. Do not replace this process with ZIP/download-and-copy commits.
@@ -55,7 +55,9 @@ A planned project directory is created only by a verified history-preserving imp
 
 `mini-wasm-runtime` was imported from source SHA `e923b27a2652aba88d50cdbb75d0fe959d40e457`. The complete reachable history passed the configured attribution scan, the subtree matched the frozen source blob-for-blob, and validation from the umbrella path passed stable and Rust 1.81 core formatter/Clippy/tests/docs, Wasmtime differential reference tests, and deterministic benchmark smoke. A permanent umbrella workflow also restores the source platform/MSRV matrix and deterministic parser fuzz smoke. The source `LICENSE` is preserved in the imported subtree.
 
-The umbrella currently exercises two real integration chains.
+`Nova` was imported from source SHA `dcadc2238737b6f1e98887ab8fa658b23413d31b`. The complete reachable history passed the configured attribution scan, the frozen source tree and imported subtree matched blob-for-blob, and source-equivalent stable gates plus the Rust 1.85 MSRV contract passed from `projects/Nova`. The source repository has README/docs/examples, `Cargo.lock`, and toolchain metadata but no top-level LICENSE file; the umbrella preserves that state exactly. A permanent path-scoped workflow mirrors Nova's rustfmt, Clippy, MSRV, tests, build and rustdoc gates.
+
+The umbrella currently exercises two real cross-project integration chains.
 
 ```text
 pinned tiny-c-compiler
@@ -88,6 +90,8 @@ The second chain intentionally validates address-level interoperability. The cur
 `tiny-tensor-compiler` is intentionally **not** shown as directly connected to `mini-elf-toolchain` yet. Its current native backend emits C11, invokes the host GCC/Clang/MSVC toolchain to build a shared library, and loads that artifact through `ctypes`; mini-ELF currently links static object/archive inputs into `ET_EXEC`. A future integration must define a real object/static-runtime or executable-artifact handoff before the umbrella claims that edge.
 
 `mini-wasm-runtime` likewise does not need a fabricated dependency on another imported project. Its verified composition boundary is the external WebAssembly reference/conformance ecosystem: pinned spec coverage, Wasmtime differential testing, deterministic fuzz smoke, and benchmark-policy execution.
+
+`Nova` is currently verified as an independent language/compiler/runtime subtree. The next import is `mini-language-server`; only after that migration is independently verified will the umbrella add the semantic/diagnostic interoperability that the existing bounded Nova adapter genuinely supports. This does not imply a complete production Nova LSP.
 
 See [docs/MIGRATION.md](docs/MIGRATION.md) for the full evidence ledger.
 
