@@ -1,0 +1,117 @@
+;; Curated supported subset from WebAssembly/spec
+;; commit fc209c5ed8afc4dfeb9252024d217da3376c7a6f
+;; source test/core/memory_grow.wast
+
+(module
+  (memory 0 10)
+  (func (export "grow") (param i32) (result i32)
+    (memory.grow (local.get 0)))
+)
+
+(assert_return (invoke "grow" (i32.const 0)) (i32.const 0))
+(assert_return (invoke "grow" (i32.const 1)) (i32.const 0))
+(assert_return (invoke "grow" (i32.const 1)) (i32.const 1))
+(assert_return (invoke "grow" (i32.const 2)) (i32.const 2))
+(assert_return (invoke "grow" (i32.const 6)) (i32.const 4))
+(assert_return (invoke "grow" (i32.const 0)) (i32.const 10))
+(assert_return (invoke "grow" (i32.const 1)) (i32.const -1))
+(assert_return (invoke "grow" (i32.const 0x10000)) (i32.const -1))
+
+;; Memory access at boundary.
+(module
+  (memory 0)
+
+  (func (export "load_at_zero") (result i32)
+    (i32.load (i32.const 0)))
+  (func (export "store_at_zero")
+    (i32.store (i32.const 0) (i32.const 2)))
+
+  (func (export "load_at_page_size") (result i32)
+    (i32.load (i32.const 0x10000)))
+  (func (export "store_at_page_size")
+    (i32.store (i32.const 0x10000) (i32.const 3)))
+
+  (func (export "grow") (param i32) (result i32)
+    (memory.grow (local.get 0)))
+  (func (export "size") (result i32)
+    (memory.size))
+)
+
+(assert_return (invoke "size") (i32.const 0))
+(assert_trap (invoke "store_at_zero") "out of bounds memory access")
+(assert_trap (invoke "load_at_zero") "out of bounds memory access")
+(assert_trap (invoke "store_at_page_size") "out of bounds memory access")
+(assert_trap (invoke "load_at_page_size") "out of bounds memory access")
+(assert_return (invoke "grow" (i32.const 1)) (i32.const 0))
+(assert_return (invoke "size") (i32.const 1))
+(assert_return (invoke "load_at_zero") (i32.const 0))
+(assert_return (invoke "store_at_zero"))
+(assert_return (invoke "load_at_zero") (i32.const 2))
+(assert_trap (invoke "store_at_page_size") "out of bounds memory access")
+(assert_trap (invoke "load_at_page_size") "out of bounds memory access")
+(assert_return (invoke "grow" (i32.const 4)) (i32.const 1))
+(assert_return (invoke "size") (i32.const 5))
+(assert_return (invoke "load_at_zero") (i32.const 2))
+(assert_return (invoke "store_at_zero"))
+(assert_return (invoke "load_at_zero") (i32.const 2))
+(assert_return (invoke "load_at_page_size") (i32.const 0))
+(assert_return (invoke "store_at_page_size"))
+(assert_return (invoke "load_at_page_size") (i32.const 3))
+
+;; As the argument of supported control constructs and instructions.
+(module
+  (memory 1)
+
+  (func (export "as-br-value") (result i32)
+    (block (result i32) (br 0 (memory.grow (i32.const 0)))))
+
+  (func (export "as-br_if-cond")
+    (block (br_if 0 (memory.grow (i32.const 0)))))
+
+  (func (export "as-return-value") (result i32)
+    (return (memory.grow (i32.const 0))))
+
+  (func (export "as-if-cond") (result i32)
+    (if (result i32) (memory.grow (i32.const 0))
+      (then (i32.const 0))
+      (else (i32.const 1))))
+  (func (export "as-if-then") (result i32)
+    (if (result i32) (i32.const 1)
+      (then (memory.grow (i32.const 0)))
+      (else (i32.const 0))))
+  (func (export "as-if-else") (result i32)
+    (if (result i32) (i32.const 0)
+      (then (i32.const 0))
+      (else (memory.grow (i32.const 0)))))
+
+  (func $f (param i32 i32 i32) (result i32)
+    (i32.const -1))
+  (func (export "as-call-first") (result i32)
+    (call $f (memory.grow (i32.const 0)) (i32.const 2) (i32.const 3)))
+  (func (export "as-call-mid") (result i32)
+    (call $f (i32.const 1) (memory.grow (i32.const 0)) (i32.const 3)))
+  (func (export "as-call-last") (result i32)
+    (call $f (i32.const 1) (i32.const 2) (memory.grow (i32.const 0))))
+
+  (func (export "as-local.set-value") (local i32)
+    (local.set 0 (memory.grow (i32.const 0))))
+  (global $g (mut i32) (i32.const 0))
+  (func (export "as-global.set-value")
+    (global.set $g (memory.grow (i32.const 0))))
+
+  (func (export "as-memory.grow-size") (result i32)
+    (memory.grow (memory.grow (i32.const 0))))
+)
+
+(assert_return (invoke "as-br-value") (i32.const 1))
+(assert_return (invoke "as-br_if-cond"))
+(assert_return (invoke "as-return-value") (i32.const 1))
+(assert_return (invoke "as-if-cond") (i32.const 0))
+(assert_return (invoke "as-if-then") (i32.const 1))
+(assert_return (invoke "as-if-else") (i32.const 1))
+(assert_return (invoke "as-call-first") (i32.const -1))
+(assert_return (invoke "as-call-mid") (i32.const -1))
+(assert_return (invoke "as-call-last") (i32.const -1))
+(assert_return (invoke "as-local.set-value"))
+(assert_return (invoke "as-global.set-value"))
+(assert_return (invoke "as-memory.grow-size") (i32.const 1))

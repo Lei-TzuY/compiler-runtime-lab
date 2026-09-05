@@ -1,0 +1,112 @@
+name: Scheduled fuzz campaign
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage-guided-campaign:
+    name: ${{ matrix.target }} campaign
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parse_module
+          - parse_validate
+    env:
+      FUZZ_TARGET: ${{ matrix.target }}
+      CORPUS_DIR: fuzz/corpus/${{ matrix.target }}
+      ARTIFACT_DIR: fuzz/artifacts/${{ matrix.target }}
+      COVERAGE_DIR: fuzz/coverage/${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install nightly Rust and coverage tools
+        run: rustup toolchain install nightly --profile minimal --component llvm-tools-preview
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+
+      - name: Restore evolving corpus
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CORPUS_DIR }}
+          key: fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ runner.os }}-${{ matrix.target }}-
+
+      - name: Materialize reviewed seed corpus
+        run: python3 fuzz/materialize-seeds.py "$FUZZ_TARGET"
+
+      - name: Replay reviewed seed manifest
+        run: cargo test -p wasm-validator --test fuzz_seed_replay
+
+      - name: Run 15-minute coverage-guided campaign
+        id: campaign
+        run: >-
+          cargo +nightly fuzz run "$FUZZ_TARGET" --
+          -seed=1
+          -max_total_time=900
+          -max_len=4096
+          -timeout=5
+          -rss_limit_mb=1024
+          -dict=fuzz/wasm.dict
+
+      - name: Minimize surviving corpus
+        id: minimize
+        if: success() && steps.campaign.outcome == 'success'
+        run: >-
+          cargo +nightly fuzz cmin "$FUZZ_TARGET" --
+          -max_len=4096
+          -timeout=5
+          -rss_limit_mb=1024
+          -dict=fuzz/wasm.dict
+
+      - name: Upload minimized corpus snapshot
+        if: success() && steps.minimize.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: ${{ env.CORPUS_DIR }}/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Replay minimized corpus with source coverage
+        if: success() && steps.minimize.outcome == 'success'
+        run: cargo +nightly fuzz coverage "$FUZZ_TARGET"
+
+      - name: Render coverage summary, LCOV, and HTML
+        if: success()
+        run: bash fuzz/render-coverage.sh "$FUZZ_TARGET"
+
+      - name: Render reviewable minimized-corpus inventory
+        if: success()
+        run: >-
+          cargo run -p wasm-validator --example review_fuzz_corpus -- "$CORPUS_DIR"
+          > "$COVERAGE_DIR/report/corpus-review.tsv"
+
+      - name: Upload coverage and review report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-coverage-${{ matrix.target }}
+          path: |
+            ${{ env.COVERAGE_DIR }}/coverage.profdata
+            ${{ env.COVERAGE_DIR }}/report/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload crash artifacts
+        if: failure() && steps.campaign.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: ${{ env.ARTIFACT_DIR }}/
+          if-no-files-found: ignore
+          retention-days: 30

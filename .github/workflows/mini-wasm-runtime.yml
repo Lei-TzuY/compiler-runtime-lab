@@ -1,0 +1,141 @@
+name: mini-wasm-runtime
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'projects/mini-wasm-runtime/**'
+      - '.github/workflows/mini-wasm-runtime.yml'
+  pull_request:
+    paths:
+      - 'projects/mini-wasm-runtime/**'
+      - '.github/workflows/mini-wasm-runtime.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mini-wasm-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Rust ${{ matrix.rust }} / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rust: stable
+            os: ubuntu-latest
+          - rust: stable
+            os: windows-latest
+          - rust: stable
+            os: macos-latest
+          - rust: 1.81.0
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: projects/mini-wasm-runtime
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install ${{ matrix.rust }} --profile minimal --component rustfmt,clippy
+          rustup default ${{ matrix.rust }}
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace --all-targets
+      - name: Docs
+        run: cargo doc --workspace --no-deps
+
+  differential:
+    name: Wasmtime differential reference
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: projects/mini-wasm-runtime
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - name: Format differential workspace
+        run: cargo fmt --manifest-path differential/Cargo.toml -- --check
+      - name: Clippy differential workspace
+        run: cargo clippy --manifest-path differential/Cargo.toml --all-targets -- -D warnings
+      - name: Compare with Wasmtime
+        run: cargo test --manifest-path differential/Cargo.toml -- --nocapture
+      - name: Upload minimized mismatch captures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-wasm-differential-mismatch-${{ github.run_id }}
+          path: projects/mini-wasm-runtime/differential/target/differential-captures/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  benchmark-smoke:
+    name: Deterministic benchmark smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: projects/mini-wasm-runtime
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - name: Format benchmark workspace
+        run: cargo fmt --manifest-path benchmarks/Cargo.toml -- --check
+      - name: Clippy benchmark workspace
+        run: cargo clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
+      - name: Test benchmark policy
+        run: cargo test --manifest-path benchmarks/Cargo.toml
+      - name: Run benchmark smoke
+        run: cargo run --release --manifest-path benchmarks/Cargo.toml -- --iterations 32 --warmup 4
+
+  fuzz-smoke:
+    name: Deterministic parser fuzz smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: projects/mini-wasm-runtime
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install nightly Rust and coverage tools
+        run: rustup toolchain install nightly --profile minimal --component llvm-tools-preview
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+      - name: Materialize reviewed seed corpus
+        run: |
+          python3 fuzz/materialize-seeds.py parse_module
+          python3 fuzz/materialize-seeds.py parse_validate
+      - name: Replay reviewed seed manifest
+        run: cargo test -p wasm-validator --test fuzz_seed_replay
+      - name: Fuzz raw parser
+        run: cargo +nightly fuzz run parse_module -- -seed=1 -runs=512 -max_len=4096 -timeout=5 -rss_limit_mb=1024 -dict=fuzz/wasm.dict
+      - name: Fuzz parse-to-validation boundary
+        run: cargo +nightly fuzz run parse_validate -- -seed=1 -runs=512 -max_len=4096 -timeout=5 -rss_limit_mb=1024 -dict=fuzz/wasm.dict
+      - name: Smoke source-coverage replay
+        run: cargo +nightly fuzz coverage parse_module
+      - name: Smoke coverage report renderer
+        run: bash fuzz/render-coverage.sh parse_module
+      - name: Render reviewable corpus inventories
+        run: |
+          mkdir -p fuzz/review
+          cargo run -p wasm-validator --example review_fuzz_corpus -- fuzz/corpus/parse_module > fuzz/review/parse_module.tsv
+          cargo run -p wasm-validator --example review_fuzz_corpus -- fuzz/corpus/parse_validate > fuzz/review/parse_validate.tsv
+      - name: Upload corpus review inventories
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-wasm-fuzz-smoke-review-${{ github.run_id }}
+          path: projects/mini-wasm-runtime/fuzz/review/*.tsv
+          if-no-files-found: error
+          retention-days: 7

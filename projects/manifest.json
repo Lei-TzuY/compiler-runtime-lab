@@ -27,7 +27,7 @@
       "target_path": "projects/sic-xe-assembler",
       "observed_main_sha": "a58f4b5c7f34675fddf437d4af596cd81b5d891f",
       "status": "hold",
-      "blocker": "Open implementation PR #30 (cross-domain memory/register CFG fixed point).",
+      "blocker": "Open implementation PR #30 was observed during preflight; recheck before any import.",
       "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search."
     },
     {
@@ -46,9 +46,10 @@
       "name": "mini-language-server",
       "source_repository": "Lei-TzuY/mini-language-server",
       "target_path": "projects/mini-language-server",
-      "observed_main_sha": "74ecddce7061abc6cae467728d12599f3403c28c",
+      "observed_main_sha": "fe4a941f11e538fcafc9255362926b0ee17cf3d4",
       "status": "ready-for-import-prep",
       "blocker": null,
+      "source_ci_run_id": 33964865348,
       "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; run full reachable-history scan before freeze."
     },
     {
@@ -84,9 +85,17 @@
       "source_repository": "Lei-TzuY/mini-wasm-runtime",
       "target_path": "projects/mini-wasm-runtime",
       "observed_main_sha": "e923b27a2652aba88d50cdbb75d0fe959d40e457",
-      "status": "ready-for-import-prep",
+      "status": "imported-verified-pending-pr-merge",
       "blocker": null,
-      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search; refresh every required CI/fuzz/differential gate before freeze."
+      "imported_source_sha": "e923b27a2652aba88d50cdbb75d0fe959d40e457",
+      "verified_migration_branch_sha": "6225808776553342e37445615ec2a2674795e320",
+      "source_core_ci_run_id": 33892678967,
+      "source_benchmark_run_id": 33892678903,
+      "source_differential_run_id": 33892679049,
+      "verification_run_id": 33966895454,
+      "repository_hygiene_notes": "Frozen source contains and preserves its top-level LICENSE, README, Cargo workspace, docs, fuzz, differential, and benchmark workspaces.",
+      "integration_notes": "No artificial dependency on another umbrella project is claimed. The verified boundary is external conformance/reference tooling: Wasmtime differential tests, deterministic benchmark-policy smoke, and deterministic parser fuzz smoke. The source 15-minute fuzz campaign remains scheduled/manual rather than being misrepresented as a per-PR gate.",
+      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry and the imported tree matched source blob-for-blob. Stable and Rust 1.81 core gates, Wasmtime differential tests, and deterministic benchmark smoke passed from the umbrella path before publication."
     },
     {
       "name": "tiny-tensor-compiler",
