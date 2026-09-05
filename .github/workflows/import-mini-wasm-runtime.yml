@@ -1,0 +1,143 @@
+name: import-mini-wasm-runtime
+
+on:
+  push:
+    branches: [chore/import-mini-wasm-runtime]
+    paths:
+      - '.github/workflows/import-mini-wasm-runtime.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO: Lei-TzuY/mini-wasm-runtime
+      SOURCE_SHA: e923b27a2652aba88d50cdbb75d0fe959d40e457
+      EXPECTED_UMBRELLA_MAIN: 2fba84ad8b39ef133d5bbcf7624e13b6328718b2
+      TARGET_PATH: projects/mini-wasm-runtime
+      SOURCE_REMOTE: source-mini-wasm
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.tmp-cargo-target
+    steps:
+      - name: Checkout full umbrella history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify frozen umbrella and source state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = 'chore/import-mini-wasm-runtime'
+          test -z "$(git status --porcelain)"
+          test ! -e "$TARGET_PATH"
+          git fetch origin main --prune
+          test "$(git rev-parse origin/main)" = "$EXPECTED_UMBRELLA_MAIN"
+          git remote add "$SOURCE_REMOTE" "https://github.com/$SOURCE_REPO.git"
+          git fetch "$SOURCE_REMOTE" main --tags --prune
+          test "$(git rev-parse "$SOURCE_REMOTE/main")" = "$SOURCE_SHA"
+
+      - name: Audit complete reachable source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git log "$SOURCE_REMOTE/main" --format='%H%x09%an%x09%ae%x09%B' > /tmp/source-history.txt
+          if grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai' /tmp/source-history.txt > /tmp/attribution-matches.txt; then
+            echo 'Attribution/history matches detected; refusing automatic import.'
+            cat /tmp/attribution-matches.txt
+            exit 1
+          fi
+          git cat-file -e "$SOURCE_SHA:Cargo.toml"
+          git cat-file -e "$SOURCE_SHA:README.md"
+          git cat-file -e "$SOURCE_SHA:crates"
+          git cat-file -e "$SOURCE_SHA:differential/Cargo.toml"
+          git cat-file -e "$SOURCE_SHA:benchmarks/Cargo.toml"
+          git cat-file -e "$SOURCE_SHA:fuzz"
+
+      - name: Import subtree without squashing history
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'LeiZ'
+          git config user.email '52287354+Lei-TzuY@users.noreply.github.com'
+          git subtree add --prefix="$TARGET_PATH" "$SOURCE_REMOTE" main
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+
+      - name: Verify subtree blob-for-blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          git ls-tree -r "$SOURCE_SHA" | sort > /tmp/source-tree.txt
+          git ls-tree -r HEAD -- "$TARGET_PATH" | sed "s#\t$TARGET_PATH/#\t#" | sort > /tmp/imported-tree.txt
+          diff -u /tmp/source-tree.txt /tmp/imported-tree.txt
+
+      - name: Install stable and MSRV Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup toolchain install 1.81.0 --profile minimal --component rustfmt,clippy
+
+      - name: Run stable core gates
+        shell: bash
+        working-directory: projects/mini-wasm-runtime
+        run: |
+          set -euo pipefail
+          cargo +stable fmt --all -- --check
+          cargo +stable clippy --workspace --all-targets -- -D warnings
+          cargo +stable test --workspace --all-targets
+          cargo +stable doc --workspace --no-deps
+
+      - name: Run MSRV core gates
+        shell: bash
+        working-directory: projects/mini-wasm-runtime
+        run: |
+          set -euo pipefail
+          cargo +1.81.0 fmt --all -- --check
+          cargo +1.81.0 clippy --workspace --all-targets -- -D warnings
+          cargo +1.81.0 test --workspace --all-targets
+          cargo +1.81.0 doc --workspace --no-deps
+
+      - name: Run differential Wasmtime smoke
+        shell: bash
+        working-directory: projects/mini-wasm-runtime
+        run: |
+          set -euo pipefail
+          cargo +stable fmt --manifest-path differential/Cargo.toml -- --check
+          cargo +stable clippy --manifest-path differential/Cargo.toml --all-targets -- -D warnings
+          cargo +stable test --manifest-path differential/Cargo.toml -- --nocapture
+
+      - name: Run deterministic benchmark smoke
+        shell: bash
+        working-directory: projects/mini-wasm-runtime
+        run: |
+          set -euo pipefail
+          cargo +stable fmt --manifest-path benchmarks/Cargo.toml -- --check
+          cargo +stable clippy --manifest-path benchmarks/Cargo.toml --all-targets -- -D warnings
+          cargo +stable test --manifest-path benchmarks/Cargo.toml
+          cargo +stable run --release --manifest-path benchmarks/Cargo.toml -- --iterations 32 --warmup 4
+
+      - name: Verify tracked tree remains clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Remove one-shot workflow and publish branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/import-mini-wasm-runtime.yml
+          git commit -m 'chore: remove one-shot mini-wasm import workflow'
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          test -z "$(git status --porcelain --untracked-files=no)"
+          if git log -2 --format='%B' | grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai'; then
+            echo 'Forbidden attribution trailer in umbrella migration commits.'
+            exit 1
+          fi
+          git fetch "$SOURCE_REMOTE" main --prune
+          test "$(git rev-parse "$SOURCE_REMOTE/main")" = "$SOURCE_SHA"
+          git fetch origin main "$GITHUB_REF_NAME" --prune
+          test "$(git rev-parse origin/main)" = "$EXPECTED_UMBRELLA_MAIN"
+          test "$(git rev-parse "origin/$GITHUB_REF_NAME")" = "$GITHUB_SHA"
+          git push origin HEAD:"$GITHUB_REF_NAME"
