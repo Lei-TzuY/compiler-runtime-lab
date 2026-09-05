@@ -17,7 +17,7 @@ This document is the durable migration ledger for `compiler-runtime-lab`.
 | tiny-c-compiler | `5607c3152d319353c42f05ed44ff53479272a74f` | reachable history includes `Co-authored-by: github-actions[bot]` | ATTRIBUTION REVIEW |
 | sic-xe-assembler | `a58f4b5c7f34675fddf437d4af596cd81b5d891f` | #30 observed during first pass; recheck before import | **HOLD / RECHECK** |
 | mini-elf-toolchain | `3d452a8681bbfb092cd41465dba6f6eb97dfd224` | complete history/tree/native Rust verification | **IMPORTED / VERIFIED** |
-| mini-language-server | `f8a4d642eaa721741ab3cea7eb02d2f261dbad01` | source CI `33967371120`; one-shot `33968415924`; six-way umbrella CI staged | **IMPORTED / VERIFIED CANDIDATE** |
+| mini-language-server | `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8` | source PR/main six-way CI; refresh `33970141357`; umbrella PR/main six-way CI; Nova/LSP shared contract on PR and merged main | **IMPORTED / VERIFIED** |
 | mini-debugger | `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` | source CI `33928883989`; one-shot `33928967178`; post-merge integration green | **IMPORTED / VERIFIED** |
 | mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | one-shot `33927869512`; permanent umbrella CI `33927981587` | **IMPORTED / VERIFIED** |
 | mini-wasm-runtime | `e923b27a2652aba88d50cdbb75d0fe959d40e457` | one-shot `33966895454`; post-merge seven-job CI `33967377142` | **IMPORTED / VERIFIED** |
@@ -134,42 +134,54 @@ No direct mini-ELF integration is claimed because the current backend produces h
 - Full history scan, non-squashed ancestry, blob equivalence, rustfmt, Clippy, tests, build/rustdoc and Rust 1.85 MSRV: PASS.
 - Source has no top-level LICENSE; that state is preserved.
 
-### mini-language-server — VERIFIED MIGRATION CANDIDATE 2026-09-05
+### mini-language-server — VERIFIED / REFRESHED / INTEGRATED 2026-09-05
 
-- Source SHA: `f8a4d642eaa721741ab3cea7eb02d2f261dbad01`
-- Exact source CI: `33967371120`, Ubuntu/Windows/macOS × Python 3.11/3.13 PASS.
-- Source open implementation PRs at freeze: `0`.
-- One-shot run: `33968415924`, PASS.
+Initial import:
+
+- Initial source SHA: `f8a4d642eaa721741ab3cea7eb02d2f261dbad01`
+- Exact initial source CI: `33967371120`, Ubuntu/Windows/macOS × Python 3.11/3.13 PASS.
+- Initial one-shot: `33968415924`, PASS.
 - First cleaned migration-branch commit: `27c6d64d32308ec7edb7d806e0ff7fe5989e2ba7`.
-- Complete reachable-history attribution scan: PASS.
-- Non-squashed source ancestry: PASS.
-- Blob-for-blob source tree vs imported subtree: PASS.
-- Python 3.13 editable install, `ruff check .` and `pytest`: PASS.
-- Clean tree, one-shot self-removal and final source/main race check: PASS.
-- Frozen source has README/docs/pyproject/src/tests but no top-level LICENSE; that state is preserved.
-- Permanent `.github/workflows/mini-language-server.yml` mirrors the source six-way OS/Python matrix.
+- Initial umbrella PR/main six-way matrices: `33968653706` and `33968725503`, PASS.
 
-#### Discovered Nova integration gap
+Typed-signature source correction and umbrella refresh:
 
-The frozen language-server source genuinely contains `NovaFunctionAdapter`, local/parameter/reference semantics and deterministic `nova.unresolved-name` diagnostics. However, imported Nova's normative grammar requires typed parameters and an explicit return type:
+- mini-language-server source fix PR: #41.
+- Refreshed source SHA: `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8`.
+- Source PR six-way CI: `33969062906`, PASS.
+- Source exact-main six-way CI: `33969140225`, PASS.
+- Newly reachable source history from `f8a4d642...` through `ab22b04e...` attribution scan: PASS.
+- Non-squashed umbrella refresh: `33970141357`, PASS; refreshed source remains umbrella ancestry and subtree matches source tree exactly.
+- Umbrella integration PR: #6.
+- PR-head mini-language-server six-way CI: `33970393511`, PASS.
+- PR-head Nova/LSP shared contract: `33970393504`, PASS.
+- Merged umbrella SHA: `102083cf54bbdfdc8bc301730831f46c09f6419e`.
+- Exact merged-main mini-language-server six-way CI: `33970500383`, PASS.
+- Exact merged-main Nova/LSP shared contract: `33970500375`, PASS.
+- Source has README/docs/pyproject/src/tests but no top-level LICENSE; that state remains preserved.
 
-```text
-fn name(parameter: Type) -> ReturnType { ... }
-```
+#### Typed Nova shared-source integration — VERIFIED 2026-09-05
 
-The frozen adapter's function-declaration pattern currently recognizes only `fn name(params) { ... }`, and its parameter parser only treats bare identifiers as parameters. Therefore the umbrella does **not** claim that legal Nova programs currently flow through the adapter. The first post-migration integration slice is to close this exact grammar mismatch and prove shared-input function/local/reference/unresolved-name behavior without weakening snapshot/stale-result semantics.
+The original consolidation audit found a concrete mismatch: Nova requires typed function declarations such as `fn name(parameter: Type) -> ReturnType { ... }`, while the initial bounded `NovaFunctionAdapter` recognized only bare parameters. Source PR #41 closed that exact mismatch for simple identifier/never surface types without weakening the language-server's snapshot/stale-result model or removing legacy bounded syntax support.
 
-## Seven-project checkpoint plan
+Both imported projects now consume the same fixtures under `integration/nova-lsp/`:
 
-The migration side of the seven-project checkpoint is complete once mini-language-server PR-head and exact-main six-way CI are green. The architectural checkpoint additionally requires the bounded Nova grammar/semantic integration slice above.
+- shared `valid.nv`: imported Nova accepts it; mini-language-server publishes function/parameter/local symbols and no Nova diagnostic;
+- shared `unresolved.nv`: imported Nova emits `N3003`; mini-language-server emits exactly `nova.unresolved-name` for `missing`.
 
-After both are complete:
+This is a real executable cross-project contract, but it remains deliberately bounded. It does not claim complete Nova grammar/type-system/LSP parity.
 
-- verify zero open migration/integration PRs;
-- verify applicable path-scoped workflows on exact umbrella `main`;
-- freeze README/manifest/ledger evidence;
-- retain `tiny-c-compiler` and `sic-xe-assembler` as explicit exceptions if their blockers remain;
-- begin the separate `systems-lab` consolidation.
+## Seven-project checkpoint — COMPLETE 2026-09-05
+
+The seven-project migration and architectural checkpoint is complete:
+
+- seven selected projects preserve source history in the umbrella;
+- applicable source-equivalent permanent workflows are green on their verified merged-main checkpoints;
+- umbrella main had zero open migration/integration PRs at the checkpoint;
+- Nova ↔ mini-language-server now has a bounded shared-source executable semantic/diagnostic contract;
+- `tiny-c-compiler` remains an explicit attribution-review exception;
+- `sic-xe-assembler` remains an explicit hold/recheck exception;
+- the next consolidation phase moves to `systems-lab` instead of stretching compiler migration indefinitely.
 
 ## Source repository retirement policy
 
