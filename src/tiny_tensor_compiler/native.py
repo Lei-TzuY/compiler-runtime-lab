@@ -18,6 +18,7 @@ from typing import Any
 
 import numpy as np
 
+from . import native_cache_lock
 from .c_abi_codegen import generate_c
 from .input_validation import prepare_runtime_inputs
 from .ir import TensorType
@@ -87,6 +88,7 @@ class NativeExecutable:
 
 _PERSISTENT_CACHE_SCHEMA = "native-v2"
 _PERSISTENT_MANIFEST_NAME = "manifest.json"
+_persistent_cache_lease = native_cache_lock.persistent_cache_lease
 _NATIVE_CACHE: dict[tuple[tuple[str, ...], str, str | None], _NativeArtifact] = {}
 _NATIVE_CACHE_LOCK = threading.RLock()
 
@@ -291,40 +293,45 @@ def _get_or_compile_persistent_artifact(
     command: list[str],
     library_path: Path,
 ) -> _NativeArtifact:
-    cached = _stage_existing_persistent_artifact(library_path)
-    if cached is not None:
-        return cached
-
-    schema_root = library_path.parent.parent
-    build_directory = Path(tempfile.mkdtemp(prefix=".build-", dir=schema_root))
     try:
-        compiled_library = _compile_source(source, command, build_directory)
-        compiled_manifest = build_directory / _PERSISTENT_MANIFEST_NAME
-        _write_persistent_manifest(
-            compiled_manifest,
-            library_path,
-            _sha256_file(compiled_library),
-        )
-        library_path.parent.mkdir(parents=True, exist_ok=True)
-        manifest_path = _persistent_manifest_path(library_path)
-        try:
-            os.replace(compiled_library, library_path)
-            os.replace(compiled_manifest, manifest_path)
-        except OSError as error:
-            concurrent = _stage_existing_persistent_artifact(library_path)
-            if concurrent is not None:
-                return concurrent
-            _invalidate_persistent_entry(library_path)
-            raise NativeCompilationError(
-                f"failed to publish persistent native artifact: {error}"
-            ) from error
+        with _persistent_cache_lease(library_path):
+            cached = _stage_existing_persistent_artifact(library_path)
+            if cached is not None:
+                return cached
 
-        staged = _stage_existing_persistent_artifact(library_path)
-        if staged is None:
-            raise NativeCompilationError("newly compiled persistent native artifact could not be loaded")
-        return staged
-    finally:
-        shutil.rmtree(build_directory, ignore_errors=True)
+            schema_root = library_path.parent.parent
+            build_directory = Path(tempfile.mkdtemp(prefix=".build-", dir=schema_root))
+            try:
+                compiled_library = _compile_source(source, command, build_directory)
+                compiled_manifest = build_directory / _PERSISTENT_MANIFEST_NAME
+                _write_persistent_manifest(
+                    compiled_manifest,
+                    library_path,
+                    _sha256_file(compiled_library),
+                )
+                library_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_path = _persistent_manifest_path(library_path)
+                try:
+                    os.replace(compiled_library, library_path)
+                    os.replace(compiled_manifest, manifest_path)
+                except OSError as error:
+                    _invalidate_persistent_entry(library_path)
+                    raise NativeCompilationError(
+                        f"failed to publish persistent native artifact: {error}"
+                    ) from error
+
+                staged = _stage_existing_persistent_artifact(library_path)
+                if staged is None:
+                    raise NativeCompilationError(
+                        "newly compiled persistent native artifact could not be loaded"
+                    )
+                return staged
+            finally:
+                shutil.rmtree(build_directory, ignore_errors=True)
+    except native_cache_lock.PersistentCacheLeaseError as error:
+        raise NativeCompilationError(
+            f"failed to acquire persistent native cache lease: {error}"
+        ) from error
 
 
 def _compile_source(source: str, command: list[str], directory_path: Path) -> Path:
