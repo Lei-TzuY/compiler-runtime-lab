@@ -15,7 +15,7 @@ This repository is intentionally being assembled with **history-preserving migra
 | [mini-language-server](https://github.com/Lei-TzuY/mini-language-server) | Version-safe semantic/LSP tooling | READY FOR IMPORT PREP |
 | [mini-debugger](projects/mini-debugger) | ptrace-based debugger | **IMPORTED / VERIFIED** |
 | [mini-libc](projects/mini-libc) | Freestanding libc subset and bootstrap target | **IMPORTED / VERIFIED** |
-| [mini-wasm-runtime](https://github.com/Lei-TzuY/mini-wasm-runtime) | WebAssembly parser, validator, runtime and conformance lab | READY FOR IMPORT PREP |
+| [mini-wasm-runtime](projects/mini-wasm-runtime) | WebAssembly parser, validator, runtime and conformance lab | **IMPORTED / VERIFIED** |
 | [tiny-tensor-compiler](projects/tiny-tensor-compiler) | Tensor IR, optimization and native compilation | **IMPORTED / VERIFIED** |
 
 ## Repository layout
@@ -34,11 +34,11 @@ compiler-runtime-lab/
     ├── mini-libc/               # imported + verified
     ├── mini-debugger/           # imported + verified
     ├── tiny-tensor-compiler/    # imported + verified
-    ├── Nova/                    # planned
+    ├── mini-wasm-runtime/       # imported + verified
+    ├── Nova/                    # planned next
+    ├── mini-language-server/    # planned after Nova
     ├── tiny-c-compiler/         # attribution review
-    ├── sic-xe-assembler/        # hold: active PR
-    ├── mini-language-server/    # planned
-    └── mini-wasm-runtime/       # planned
+    └── sic-xe-assembler/        # hold: active PR
 ```
 
 A planned project directory is created only by a verified history-preserving import. Do not replace this process with ZIP/download-and-copy commits.
@@ -51,7 +51,9 @@ A planned project directory is created only by a verified history-preserving imp
 
 `mini-debugger` was imported from source SHA `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` after its exact source CI, complete reachable-history attribution scan, native CMake/CTest suite, ancestry check, and blob-for-blob subtree comparison passed. It is protected by a permanent umbrella workflow together with the imported mini-ELF toolchain.
 
-`tiny-tensor-compiler` was imported from source SHA `66ff2c6d02a22c621d01579b442af8b6fd43bcc5`, including its post-v0.1 multi-output CPU/reference pipeline. The full reachable history and imported tree were verified, and the source-native `ruff`/`pytest` gates passed from the umbrella layout. Permanent CI mirrors its source matrix across Ubuntu/Windows and Python 3.11/3.13. The frozen source has no top-level LICENSE file; the umbrella preserves that state rather than manufacturing one.
+`tiny-tensor-compiler` is synchronized through source SHA `4690df5747a1e7fc0af9b602f8be8d963e72d00f`. Its initial import and subsequent 26-commit non-squashed subtree refresh each preserved source ancestry and tree equivalence. Permanent CI mirrors the source matrix across Ubuntu/Windows and Python 3.11/3.13; the refreshed umbrella main passed all four jobs. The source has no top-level LICENSE file, and the umbrella preserves that state rather than manufacturing one.
+
+`mini-wasm-runtime` was imported from source SHA `e923b27a2652aba88d50cdbb75d0fe959d40e457`. The complete reachable history passed the configured attribution scan, the subtree matched the frozen source blob-for-blob, and validation from the umbrella path passed stable and Rust 1.81 core formatter/Clippy/tests/docs, Wasmtime differential reference tests, and deterministic benchmark smoke. A permanent umbrella workflow also restores the source platform/MSRV matrix and deterministic parser fuzz smoke. The source `LICENSE` is preserved in the imported subtree.
 
 The umbrella currently exercises two real integration chains.
 
@@ -84,6 +86,8 @@ continue + breakpoint hit
 The second chain intentionally validates address-level interoperability. The current mini-ELF executable writer emits no section-header table (`e_shoff = 0`, `e_shnum = 0`), so it would be false to claim `.symtab`-based debugging for these generated images. Symbol-level interoperability is a future capability boundary for the linker/metadata layer, not something hidden by a weaker test.
 
 `tiny-tensor-compiler` is intentionally **not** shown as directly connected to `mini-elf-toolchain` yet. Its current native backend emits C11, invokes the host GCC/Clang/MSVC toolchain to build a shared library, and loads that artifact through `ctypes`; mini-ELF currently links static object/archive inputs into `ET_EXEC`. A future integration must define a real object/static-runtime or executable-artifact handoff before the umbrella claims that edge.
+
+`mini-wasm-runtime` likewise does not need a fabricated dependency on another imported project. Its verified composition boundary is the external WebAssembly reference/conformance ecosystem: pinned spec coverage, Wasmtime differential testing, deterministic fuzz smoke, and benchmark-policy execution.
 
 See [docs/MIGRATION.md](docs/MIGRATION.md) for the full evidence ledger.
 
