@@ -22,7 +22,6 @@ jobs:
   shared-contract:
     runs-on: ubuntu-latest
     env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/nova-lsp-target
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v5
@@ -41,7 +40,10 @@ jobs:
         run: python integration/nova-lsp/check_lsp.py
 
       - name: Verify legal shared fixture through Nova
+        shell: bash
         run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/nova-lsp-target"
           cargo run --quiet \
             --manifest-path projects/Nova/Cargo.toml \
             -p nova-cli -- \
@@ -51,6 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/nova-lsp-target"
           set +e
           cargo run --quiet \
             --manifest-path projects/Nova/Cargo.toml \
