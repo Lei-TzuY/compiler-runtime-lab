@@ -55,15 +55,18 @@
       "source_repository": "Lei-TzuY/mini-language-server",
       "target_path": "projects/mini-language-server",
       "observed_main_sha": "f8a4d642eaa721741ab3cea7eb02d2f261dbad01",
-      "status": "imported-verified-pending-pr-merge",
+      "status": "imported-verified",
       "blocker": null,
       "imported_source_sha": "f8a4d642eaa721741ab3cea7eb02d2f261dbad01",
       "verified_migration_branch_sha": "27c6d64d32308ec7edb7d806e0ff7fe5989e2ba7",
       "source_ci_run_id": 33967371120,
       "verification_run_id": 33968415924,
+      "pr_ci_run_id": 33968653706,
+      "merged_umbrella_sha": "a9a1d039df03038cf378295039892791521bcfe3",
+      "umbrella_post_merge_ci_run_id": 33968725503,
       "repository_hygiene_notes": "Frozen source contains README, docs, pyproject, src and tests but no top-level LICENSE file; migration preserves that source state exactly.",
       "integration_notes": "The frozen source contains a bounded NovaFunctionAdapter with function/local/reference and nova.unresolved-name diagnostics. A cross-project audit found that its declaration regex currently accepts fn name(params) { ... } with bare parameters, while normative imported Nova requires typed parameters and an explicit -> return type. No full Nova-LSP interoperability is claimed until that grammar mismatch is implemented and regression-tested.",
-      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry, the subtree matched source blob-for-blob, and Python 3.13 editable-install, ruff and pytest gates passed before publication. Permanent umbrella CI mirrors the source Ubuntu/Windows/macOS × Python 3.11/3.13 matrix."
+      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry, the subtree matched source blob-for-blob, the one-shot Python gate passed, and both PR-head plus exact merged-main Ubuntu/Windows/macOS × Python 3.11/3.13 matrices passed all six jobs."
     },
     {
       "name": "mini-debugger",
