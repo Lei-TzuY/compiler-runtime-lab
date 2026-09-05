@@ -85,7 +85,7 @@
       "source_repository": "Lei-TzuY/mini-wasm-runtime",
       "target_path": "projects/mini-wasm-runtime",
       "observed_main_sha": "e923b27a2652aba88d50cdbb75d0fe959d40e457",
-      "status": "imported-verified-pending-pr-merge",
+      "status": "imported-verified",
       "blocker": null,
       "imported_source_sha": "e923b27a2652aba88d50cdbb75d0fe959d40e457",
       "verified_migration_branch_sha": "6225808776553342e37445615ec2a2674795e320",
@@ -93,9 +93,11 @@
       "source_benchmark_run_id": 33892678903,
       "source_differential_run_id": 33892679049,
       "verification_run_id": 33966895454,
+      "merged_umbrella_sha": "e7b1df4734d6c5b4b04c2e6a99de424932c2079f",
+      "umbrella_post_merge_ci_run_id": 33967377142,
       "repository_hygiene_notes": "Frozen source contains and preserves its top-level LICENSE, README, Cargo workspace, docs, fuzz, differential, and benchmark workspaces.",
       "integration_notes": "No artificial dependency on another umbrella project is claimed. The verified boundary is external conformance/reference tooling: Wasmtime differential tests, deterministic benchmark-policy smoke, and deterministic parser fuzz smoke. The source 15-minute fuzz campaign remains scheduled/manual rather than being misrepresented as a per-PR gate.",
-      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry and the imported tree matched source blob-for-blob. Stable and Rust 1.81 core gates, Wasmtime differential tests, and deterministic benchmark smoke passed from the umbrella path before publication."
+      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry and the imported tree matched source blob-for-blob. Stable and Rust 1.81 core gates, Wasmtime differential tests, deterministic benchmark smoke, and the permanent 7-job post-merge umbrella matrix all passed."
     },
     {
       "name": "tiny-tensor-compiler",
