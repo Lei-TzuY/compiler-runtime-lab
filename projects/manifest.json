@@ -93,16 +93,18 @@
       "source_repository": "Lei-TzuY/tiny-tensor-compiler",
       "target_path": "projects/tiny-tensor-compiler",
       "observed_main_sha": "4690df5747a1e7fc0af9b602f8be8d963e72d00f",
-      "status": "imported-verified-refresh-pending-pr-merge",
+      "status": "imported-verified",
       "blocker": null,
       "imported_source_sha": "4690df5747a1e7fc0af9b602f8be8d963e72d00f",
       "initial_verified_migration_branch_sha": "53a48fb97ebb8ea9139a349f1a4948fe3c5faa94",
       "source_ci_run_id": 33958924301,
       "initial_verification_run_id": 33929543578,
       "refresh_verification_run_id": 33966522648,
+      "merged_umbrella_sha": "ae03589a39a36d2df8e8220d933471722708cedc",
+      "umbrella_post_merge_ci_run_id": 33966708522,
       "repository_hygiene_notes": "Source has README, CHANGELOG, docs, pyproject and project metadata but no top-level LICENSE file; migration preserves that source state rather than inventing licensing metadata.",
       "integration_notes": "The native backend emits and loads shared libraries through the host C toolchain, while mini-elf-toolchain is a static ET_EXEC linker. No fake direct integration is claimed; a future edge requires a deliberate object/static-runtime or executable-artifact handoff.",
-      "attribution_notes": "Initial complete reachable-history scan passed. Refresh from 66ff2c6d... through 4690df57... separately scanned all newly reachable commits for configured attribution patterns, preserved the new source head as umbrella ancestry, matched the refreshed subtree blob-for-blob, and passed ruff/pytest from the umbrella path."
+      "attribution_notes": "Initial complete reachable-history scan passed. Refresh from 66ff2c6d... through 4690df57... separately scanned all newly reachable commits for configured attribution patterns, preserved the new source head as umbrella ancestry, matched the refreshed subtree blob-for-blob, passed ruff/pytest from the umbrella path, and the merged umbrella main passed the full Ubuntu/Windows × Python 3.11/3.13 matrix."
     }
   ]
 }
