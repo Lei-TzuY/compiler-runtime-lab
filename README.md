@@ -12,7 +12,7 @@ This repository is intentionally assembled with **history-preserving migration**
 | [tiny-c-compiler](https://github.com/Lei-TzuY/tiny-c-compiler) | Self-contained x86-64 C compiler | ATTRIBUTION REVIEW |
 | [sic-xe-assembler](https://github.com/Lei-TzuY/sic-xe-assembler) | SIC/XE assembler and static-analysis tooling | HOLD — recheck active implementation state |
 | [mini-elf-toolchain](projects/mini-elf-toolchain) | ELF/static-linking toolchain | **IMPORTED / VERIFIED** |
-| [mini-language-server](projects/mini-language-server) | Version-safe semantic/LSP tooling | **IMPORTED / VERIFIED CANDIDATE** |
+| [mini-language-server](projects/mini-language-server) | Version-safe semantic/LSP tooling | **IMPORTED / VERIFIED** |
 | [mini-debugger](projects/mini-debugger) | ptrace-based debugger | **IMPORTED / VERIFIED** |
 | [mini-libc](projects/mini-libc) | Freestanding libc subset and bootstrap target | **IMPORTED / VERIFIED** |
 | [mini-wasm-runtime](projects/mini-wasm-runtime) | WebAssembly parser, validator, runtime and conformance lab | **IMPORTED / VERIFIED** |
@@ -26,6 +26,8 @@ compiler-runtime-lab/
 ├── ROADMAP.md
 ├── docs/
 │   └── MIGRATION.md
+├── integration/
+│   └── nova-lsp/
 └── projects/
     ├── mini-elf-toolchain/      # imported + verified
     ├── mini-libc/               # imported + verified
@@ -33,7 +35,7 @@ compiler-runtime-lab/
     ├── tiny-tensor-compiler/    # imported + verified
     ├── mini-wasm-runtime/       # imported + verified
     ├── Nova/                    # imported + verified
-    ├── mini-language-server/    # imported + verified candidate
+    ├── mini-language-server/    # imported + verified
     ├── tiny-c-compiler/         # attribution review
     └── sic-xe-assembler/        # hold / recheck
 ```
@@ -54,7 +56,7 @@ A project directory is created only by a verified history-preserving import. ZIP
 
 `Nova` was imported from source SHA `dcadc2238737b6f1e98887ab8fa658b23413d31b`. Full reachable history, blob equivalence, stable rustfmt/Clippy/tests/build/rustdoc and Rust 1.85 MSRV all passed; exact merged umbrella main later passed all five permanent Nova jobs. The source has no top-level LICENSE, which is preserved as-is.
 
-`mini-language-server` is staged from source SHA `f8a4d642eaa721741ab3cea7eb02d2f261dbad01`. The complete reachable-history attribution scan, non-squashed ancestry, blob-for-blob equivalence, Python 3.13 editable install, `ruff` and `pytest` passed in one-shot run `33968415924`. Permanent CI mirrors its source matrix across Ubuntu/Windows/macOS × Python 3.11/3.13. The frozen source contains README/docs/pyproject/src/tests but no top-level LICENSE.
+`mini-language-server` was initially imported at source SHA `f8a4d642eaa721741ab3cea7eb02d2f261dbad01` and then non-squashed-refreshed through `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8`. The refreshed source remains reachable umbrella ancestry and matches source tree content exactly. Source PR/main CI and umbrella PR/main CI all pass Ubuntu/Windows/macOS × Python 3.11/3.13, and exact merged umbrella main also passes the bounded Nova ↔ LSP shared-source contract. The source contains no top-level LICENSE; that state is preserved.
 
 ## Verified integration chains
 
@@ -84,6 +86,15 @@ numeric software breakpoint at 0x400001
 continue + breakpoint hit
 ```
 
+```text
+shared legal / unresolved Nova fixtures
+        ↓                         ↓
+projects/Nova                projects/mini-language-server
+nova check                   NovaFunctionAdapter semantic publication
+        ↓                         ↓
+valid acceptance / N3003     symbols + no diagnostic / nova.unresolved-name
+```
+
 The debugger chain deliberately validates address-level interoperability. Current mini-ELF output has no section-header table / `.symtab`, so symbol-level debugging is not claimed.
 
 `tiny-tensor-compiler` is not falsely shown as directly connected to mini-ELF: its native backend currently emits C11 and builds a shared library with the host toolchain, while mini-ELF links static object/archive inputs into `ET_EXEC`. A real object/static-runtime or executable-artifact handoff is still required.
@@ -92,9 +103,11 @@ The debugger chain deliberately validates address-level interoperability. Curren
 
 ## Nova ↔ mini-language-server boundary
 
-The two projects are now present in the same umbrella, but a full Nova language-server integration is **not** claimed yet.
+A bounded executable integration is now verified. Source PR #41 taught the `NovaFunctionAdapter` to consume legal Nova-style typed parameters and explicit simple return types while preserving the adapter's legacy bounded surface and snapshot/stale-result guarantees.
 
-The frozen mini-language-server source already has a bounded `NovaFunctionAdapter` with function/local/reference semantics and deterministic `nova.unresolved-name` diagnostics. A cross-project audit found a concrete grammar gap: imported Nova's normative grammar requires function declarations of the form `fn name(typed: Type) -> ReturnType { ... }`, while the frozen adapter currently recognizes `fn name(params) { ... }` with bare parameters. Therefore the next cross-project correctness milestone is to make that adapter consume real typed Nova function signatures and prove the shared semantics with regression tests. Until that is green, calling this a complete Nova LSP would be misleading.
+Both imported projects consume the exact same fixtures under `integration/nova-lsp/`: `valid.nv` must pass `nova check` and publish function/parameter/local symbols with no mini-language-server diagnostics; `unresolved.nv` must fail Nova with `N3003` and publish exactly one `nova.unresolved-name` diagnostic for `missing`. Permanent `nova-lsp-integration` CI enforces that shared contract whenever Nova, mini-language-server, the shared fixtures, or the integration workflow changes.
+
+This is intentionally not a claim that mini-language-server implements Nova's complete grammar, type system, or production LSP surface. It proves the exact typed-function/name-resolution slice both projects currently promise.
 
 See [docs/MIGRATION.md](docs/MIGRATION.md) for the evidence ledger and [ROADMAP.md](ROADMAP.md) for the checkpoint plan.
 
