@@ -1,0 +1,8 @@
+fn helper(value: Int) -> Int {
+    value
+}
+
+fn main() -> Int {
+    let local = 1;
+    helper(local)
+}
