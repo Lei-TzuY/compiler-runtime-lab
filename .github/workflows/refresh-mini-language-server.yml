@@ -1,0 +1,86 @@
+name: refresh-mini-language-server
+
+on:
+  push:
+    branches: [integration/nova-lsp-typed-signatures]
+    paths:
+      - ".github/workflows/refresh-mini-language-server.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      UMBRELLA_BASE: 3df1c0394041aa640548aa854241f3abb71f4989
+      OLD_SOURCE_SHA: f8a4d642eaa721741ab3cea7eb02d2f261dbad01
+      NEW_SOURCE_SHA: ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: integration/nova-lsp-typed-signatures
+
+      - name: Verify frozen state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$UMBRELLA_BASE"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$UMBRELLA_BASE"
+          git remote add lsp-source https://github.com/Lei-TzuY/mini-language-server.git
+          git fetch lsp-source --tags
+          test "$(git rev-parse lsp-source/main)" = "$NEW_SOURCE_SHA"
+          git merge-base --is-ancestor "$OLD_SOURCE_SHA" "$NEW_SOURCE_SHA"
+          git merge-base --is-ancestor "$OLD_SOURCE_SHA" HEAD
+
+      - name: Audit newly reachable source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          matches="$(git log "$OLD_SOURCE_SHA..$NEW_SOURCE_SHA" --format='%H%x00%an%x00%ae%x00%B' | grep -Eai 'co-authored-by|generated-by|assisted-by|signed-off-by|anthropic|claude|openai' || true)"
+          if [ -n "$matches" ]; then
+            printf '%s\n' "$matches"
+            echo "Configured attribution pattern matched newly reachable source history" >&2
+            exit 1
+          fi
+
+      - name: Refresh subtree without squashing
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "LeiZ"
+          git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+          git subtree pull \
+            --prefix=projects/mini-language-server \
+            lsp-source "$NEW_SOURCE_SHA" \
+            -m "chore: refresh mini-language-server typed signatures"
+          git merge-base --is-ancestor "$NEW_SOURCE_SHA" HEAD
+          source_tree="$(git rev-parse "$NEW_SOURCE_SHA^{tree}")"
+          imported_tree="$(git rev-parse HEAD:projects/mini-language-server)"
+          test "$source_tree" = "$imported_tree"
+
+      - name: Run source-equivalent gates from umbrella path
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e 'projects/mini-language-server[dev]'
+          (
+            cd projects/mini-language-server
+            python -m ruff check .
+            python -m pytest
+          )
+          test -z "$(git status --short)"
+
+      - name: Final race check and publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$UMBRELLA_BASE"
+          test "$(git ls-remote lsp-source refs/heads/main | cut -f1)" = "$NEW_SOURCE_SHA"
+          git rm .github/workflows/refresh-mini-language-server.yml
+          git commit -m "chore: remove mini-language-server refresh workflow"
+          git merge-base --is-ancestor "$NEW_SOURCE_SHA" HEAD
+          test -z "$(git status --short)"
+          git push origin HEAD:integration/nova-lsp-typed-signatures
