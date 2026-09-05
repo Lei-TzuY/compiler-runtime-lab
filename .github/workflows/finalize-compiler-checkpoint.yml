@@ -1,0 +1,212 @@
+name: finalize-compiler-checkpoint
+
+on:
+  push:
+    branches: [docs/finalize-nova-lsp-checkpoint]
+    paths:
+      - ".github/workflows/finalize-compiler-checkpoint.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: docs/finalize-nova-lsp-checkpoint
+
+      - name: Verify frozen checkpoint base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "102083cf54bbdfdc8bc301730831f46c09f6419e"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "102083cf54bbdfdc8bc301730831f46c09f6419e"
+
+      - name: Finalize durable checkpoint evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+          import json
+          from pathlib import Path
+
+          # Machine-readable manifest.
+          manifest_path = Path("projects/manifest.json")
+          data = json.loads(manifest_path.read_text())
+          project = next(item for item in data["projects"] if item["name"] == "mini-language-server")
+          project.update({
+              "observed_main_sha": "ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8",
+              "imported_source_sha": "ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8",
+              "source_ci_run_id": 33969140225,
+              "source_pr_ci_run_id": 33969062906,
+              "refresh_verification_run_id": 33970141357,
+              "integration_pr_ci_run_id": 33970393504,
+              "merged_umbrella_sha": "102083cf54bbdfdc8bc301730831f46c09f6419e",
+              "umbrella_post_merge_ci_run_id": 33970500383,
+              "integration_post_merge_ci_run_id": 33970500375,
+              "integration_notes": (
+                  "Verified bounded Nova ↔ mini-language-server shared-source contract. "
+                  "Source PR #41 added legal typed Nova parameter/return signatures. "
+                  "The umbrella refresh preserves source commit ab22b04e... as ancestry. "
+                  "Shared valid.nv is accepted by imported Nova and publishes function/parameter/local symbols with no LSP diagnostics; "
+                  "shared unresolved.nv is rejected by Nova as N3003 and published by mini-language-server as nova.unresolved-name. "
+                  "This does not claim complete Nova grammar or type-system coverage."
+              ),
+              "attribution_notes": (
+                  "Initial complete reachable-history scan passed before import. Newly reachable history from f8a4d642... through ab22b04e... "
+                  "was separately scanned before the non-squashed refresh; the refreshed source remains umbrella ancestry and matched blob-for-blob. "
+                  "Source PR/main and umbrella PR/main six-way Ubuntu/Windows/macOS × Python 3.11/3.13 matrices passed, and the shared Nova/LSP contract passed on exact merged umbrella main."
+              ),
+          })
+          manifest_path.write_text(json.dumps(data, indent=2) + "\n")
+
+          # README status and integration narrative.
+          readme_path = Path("README.md")
+          readme = readme_path.read_text()
+          readme = readme.replace(
+              "| [mini-language-server](projects/mini-language-server) | Version-safe semantic/LSP tooling | **IMPORTED / VERIFIED CANDIDATE** |",
+              "| [mini-language-server](projects/mini-language-server) | Version-safe semantic/LSP tooling | **IMPORTED / VERIFIED** |",
+          )
+          readme = readme.replace(
+              "    ├── mini-language-server/    # imported + verified candidate",
+              "    ├── mini-language-server/    # imported + verified",
+          )
+          old_import = "`mini-language-server` is staged from source SHA `f8a4d642eaa721741ab3cea7eb02d2f261dbad01`. The complete reachable-history attribution scan, non-squashed ancestry, blob-for-blob equivalence, Python 3.13 editable install, `ruff` and `pytest` passed in one-shot run `33968415924`. Permanent CI mirrors its source matrix across Ubuntu/Windows/macOS × Python 3.11/3.13. The frozen source contains README/docs/pyproject/src/tests but no top-level LICENSE."
+          new_import = "`mini-language-server` was imported at `f8a4d642eaa721741ab3cea7eb02d2f261dbad01` and then non-squashed-refreshed through source SHA `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8`. The refresh preserves source ancestry and tree equivalence, source PR/main CI and umbrella PR/main CI all pass Ubuntu/Windows/macOS × Python 3.11/3.13, and the exact merged umbrella main also passes the Nova ↔ LSP shared-source integration contract. The source contains no top-level LICENSE; that state is preserved."
+          if old_import not in readme:
+              raise SystemExit("README mini-language-server import paragraph drifted")
+          readme = readme.replace(old_import, new_import, 1)
+          old_boundary = """## Nova ↔ mini-language-server boundary
+
+The two projects are now present in the same umbrella, but a full Nova language-server integration is **not** claimed yet.
+
+The frozen mini-language-server source already has a bounded `NovaFunctionAdapter` with function/local/reference semantics and deterministic `nova.unresolved-name` diagnostics. A cross-project audit found a concrete grammar gap: imported Nova's normative grammar requires function declarations of the form `fn name(typed: Type) -> ReturnType { ... }`, while the frozen adapter currently recognizes `fn name(params) { ... }` with bare parameters. Therefore the next cross-project correctness milestone is to make that adapter consume real typed Nova function signatures and prove the shared semantics with regression tests. Until that is green, calling this a complete Nova LSP would be misleading.
+"""
+          new_boundary = """## Nova ↔ mini-language-server boundary
+
+A bounded executable integration is now verified. Source PR #41 taught the `NovaFunctionAdapter` to consume legal Nova-style typed parameters and explicit simple return types while preserving the adapter's legacy bounded surface and snapshot/stale-result guarantees.
+
+Both imported projects now consume the exact same fixtures under `integration/nova-lsp/`: `valid.nv` must pass `nova check` and publish function/parameter/local symbols with no mini-language-server diagnostics; `unresolved.nv` must fail Nova with `N3003` and publish exactly one `nova.unresolved-name` diagnostic for `missing`. Permanent `nova-lsp-integration` CI enforces that shared contract whenever Nova, mini-language-server, the shared fixtures, or the integration workflow changes.
+
+This is intentionally not a claim that mini-language-server implements Nova's complete grammar, type system, or production LSP surface. It proves the exact typed-function/name-resolution slice both projects currently promise.
+"""
+          if old_boundary not in readme:
+              raise SystemExit("README Nova/LSP boundary section drifted")
+          readme_path.write_text(readme.replace(old_boundary, new_boundary, 1))
+
+          # Roadmap checkpoint completion.
+          roadmap_path = Path("ROADMAP.md")
+          roadmap = roadmap_path.read_text()
+          roadmap = roadmap.replace(
+              "- [x] mini-language-server — frozen at `f8a4d642eaa721741ab3cea7eb02d2f261dbad01`; exact source CI `33967371120`, zero open PRs, complete reachable-history attribution, non-squashed ancestry, tree equivalence and Python gates passed in one-shot `33968415924`.",
+              "- [x] mini-language-server — imported at `f8a4d642eaa721741ab3cea7eb02d2f261dbad01` and non-squashed-refreshed through `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8`; source PR/main six-way CI, refresh ancestry/tree equivalence, umbrella six-way CI, and shared Nova/LSP integration all passed.",
+          )
+          roadmap = roadmap.replace(
+              "7. [x] `mini-language-server` — **IMPORTED / VERIFIED CANDIDATE**; permanent six-way matrix pending PR/main proof",
+              "7. [x] `mini-language-server` — **IMPORTED / VERIFIED**; source refresh and exact merged-main six-way + Nova/LSP integration proof complete",
+          )
+          roadmap = roadmap.replace(
+              "Seven projects now preserve source history and selected source trees in the umbrella candidate. The seventh is not final until its PR-head and merged-main six-way source-equivalent matrix are green.",
+              "Seven projects now preserve source history and verified source trees in the umbrella. The seven-project migration checkpoint is final; mini-language-server additionally has a verified shared-source semantic contract with Nova.",
+          )
+          roadmap = roadmap.replace(
+              "- [ ] close the discovered Nova ↔ mini-language-server grammar gap, then add a genuine shared-input semantic/diagnostic integration regression;",
+              "- [x] close the discovered Nova ↔ mini-language-server typed-signature grammar gap and enforce a genuine shared-input semantic/diagnostic integration regression;",
+          )
+          start = roadmap.index("### Nova ↔ mini-language-server gap")
+          end = roadmap.index("## Phase 4 — Seven-project checkpoint")
+          replacement = """### Nova ↔ mini-language-server verified contract
+
+The original typed-signature mismatch is closed. The imported adapter now consumes the bounded legal Nova form `fn name(parameter: Type) -> ReturnType { ... }` for simple identifier/never surface types. Shared fixtures under `integration/nova-lsp/` are consumed by both projects: the legal fixture passes Nova and produces no LSP diagnostic, while the unresolved fixture produces Nova `N3003` and mini-language-server `nova.unresolved-name`.
+
+The contract remains intentionally bounded; full Nova grammar/type-system/LSP parity is not claimed.
+
+"""
+          roadmap = roadmap[:start] + replacement + roadmap[end:]
+          phase4_old = """After mini-language-server PR/main CI and the grammar-integration slice are green:
+
+- [ ] freeze the seven-project checkpoint in README/manifest/ledger;
+- [ ] verify umbrella `main` has zero open migration/integration PRs and applicable workflows are green;
+- [ ] record the bounded Nova ↔ mini-language-server semantic/diagnostic contract;
+- [ ] keep `tiny-c-compiler` and `sic-xe-assembler` as explicit pending exceptions if their blockers remain;
+- [ ] begin Phase 0 for `systems-lab` rather than extending compiler migration indefinitely.
+"""
+          phase4_new = """The seven-project checkpoint is complete:
+
+- [x] freeze the seven-project checkpoint in README/manifest/ledger;
+- [x] verify umbrella `main` has zero open migration/integration PRs and applicable workflows are green;
+- [x] record and execute the bounded Nova ↔ mini-language-server semantic/diagnostic contract;
+- [x] keep `tiny-c-compiler` and `sic-xe-assembler` as explicit pending exceptions rather than blocking the flagship checkpoint;
+- [x] hand off the next consolidation phase to `systems-lab` instead of extending compiler migration indefinitely.
+"""
+          if phase4_old not in roadmap:
+              raise SystemExit("ROADMAP Phase 4 block drifted")
+          roadmap_path.write_text(roadmap.replace(phase4_old, phase4_new, 1))
+
+          # Durable ledger: remove candidate language and append final verified slice.
+          migration_path = Path("docs/MIGRATION.md")
+          migration = migration_path.read_text()
+          migration = migration.replace(
+              "| mini-language-server | `f8a4d642eaa721741ab3cea7eb02d2f261dbad01` | source CI `33967371120`; one-shot `33968415924`; six-way umbrella CI staged | **IMPORTED / VERIFIED CANDIDATE** |",
+              "| mini-language-server | `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8` | source PR/main six-way CI; refresh `33970141357`; umbrella PR/main six-way CI; Nova/LSP shared-contract PR/main CI | **IMPORTED / VERIFIED** |",
+          )
+          migration = migration.replace(
+              "### mini-language-server — VERIFIED MIGRATION CANDIDATE 2026-09-05",
+              "### mini-language-server — VERIFIED / REFRESHED / INTEGRATED 2026-09-05",
+          )
+          marker = "## Seven-project checkpoint plan"
+          if marker not in migration:
+              raise SystemExit("MIGRATION checkpoint marker missing")
+          integration_evidence = """#### Typed Nova shared-source integration — VERIFIED 2026-09-05
+
+- mini-language-server source fix PR: #41
+- refreshed source SHA: `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8`
+- source PR six-way CI: `33969062906`, PASS
+- source exact-main six-way CI: `33969140225`, PASS
+- non-squashed umbrella refresh: `33970141357`, PASS; refreshed source remains umbrella ancestry and subtree matches source tree exactly
+- umbrella integration PR: #6
+- PR-head mini-language-server six-way CI: `33970393511`, PASS
+- PR-head Nova/LSP shared contract: `33970393504`, PASS
+- merged umbrella SHA: `102083cf54bbdfdc8bc301730831f46c09f6419e`
+- exact merged-main mini-language-server six-way CI: `33970500383`, PASS
+- exact merged-main Nova/LSP shared contract: `33970500375`, PASS
+- shared `valid.nv`: Nova accepts; mini-language-server publishes function/parameter/local symbols and no Nova diagnostic
+- shared `unresolved.nv`: Nova emits `N3003`; mini-language-server emits exactly `nova.unresolved-name` for `missing`
+
+This closes the concrete typed-function grammar mismatch discovered during consolidation. The contract remains bounded and does not claim complete Nova grammar/type-system/LSP parity.
+
+"""
+          migration = migration.replace(marker, integration_evidence + marker, 1)
+          migration = migration.replace(
+              "The migration side of the seven-project checkpoint is complete once mini-language-server PR-head and exact-main six-way CI are green. The architectural checkpoint additionally requires the bounded Nova grammar/semantic integration slice above.",
+              "The seven-project migration and architectural checkpoint is complete: mini-language-server PR/main six-way CI is green and the bounded Nova grammar/semantic shared-source integration slice is verified on exact merged main.",
+          )
+          migration_path.write_text(migration)
+
+          # Validate no stale candidate/gap claims remain in the key checkpoint docs.
+          for path in [readme_path, roadmap_path, migration_path]:
+              text = path.read_text()
+              if "IMPORTED / VERIFIED CANDIDATE" in text:
+                  raise SystemExit(f"stale candidate status remains in {path}")
+          json.loads(manifest_path.read_text())
+          PY
+
+          git diff --check
+          python -m json.tool projects/manifest.json >/dev/null
+
+      - name: Publish clean documentation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "102083cf54bbdfdc8bc301730831f46c09f6419e"
+          git config user.name "LeiZ"
+          git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+          git add README.md ROADMAP.md docs/MIGRATION.md projects/manifest.json
+          git rm .github/workflows/finalize-compiler-checkpoint.yml
+          git commit -m "docs: finalize Nova LSP integration checkpoint"
+          test -z "$(git status --short)"
+          git push origin HEAD:docs/finalize-nova-lsp-checkpoint
