@@ -53,8 +53,8 @@ def main() -> None:
     valid_symbols, valid_diagnostics = analyze(root / "valid.nv")
     assert valid_symbols == [
         ("helper", "function"),
-        ("value", "parameter"),
         ("main", "function"),
+        ("value", "parameter"),
         ("local", "variable"),
     ]
     assert valid_diagnostics == []
