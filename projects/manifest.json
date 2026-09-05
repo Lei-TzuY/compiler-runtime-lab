@@ -92,16 +92,17 @@
       "name": "tiny-tensor-compiler",
       "source_repository": "Lei-TzuY/tiny-tensor-compiler",
       "target_path": "projects/tiny-tensor-compiler",
-      "observed_main_sha": "66ff2c6d02a22c621d01579b442af8b6fd43bcc5",
-      "status": "imported-verified",
+      "observed_main_sha": "4690df5747a1e7fc0af9b602f8be8d963e72d00f",
+      "status": "imported-verified-refresh-pending-pr-merge",
       "blocker": null,
-      "imported_source_sha": "66ff2c6d02a22c621d01579b442af8b6fd43bcc5",
-      "verified_migration_branch_sha": "53a48fb97ebb8ea9139a349f1a4948fe3c5faa94",
-      "source_ci_run_id": 33928929309,
-      "verification_run_id": 33929543578,
-      "repository_hygiene_notes": "Frozen source has README, CHANGELOG, docs, pyproject and project metadata but no top-level LICENSE file; migration preserves that source state rather than inventing licensing metadata.",
-      "integration_notes": "The current native backend emits and loads shared libraries through the host C toolchain, while mini-elf-toolchain is a static ET_EXEC linker. No fake direct integration is claimed yet; the future boundary is a deliberate object/static-runtime handoff or another executable artifact contract.",
-      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history remains umbrella ancestry, the subtree matched source blob-for-blob, and source-native ruff/pytest gates passed from the umbrella path."
+      "imported_source_sha": "4690df5747a1e7fc0af9b602f8be8d963e72d00f",
+      "initial_verified_migration_branch_sha": "53a48fb97ebb8ea9139a349f1a4948fe3c5faa94",
+      "source_ci_run_id": 33958924301,
+      "initial_verification_run_id": 33929543578,
+      "refresh_verification_run_id": 33966522648,
+      "repository_hygiene_notes": "Source has README, CHANGELOG, docs, pyproject and project metadata but no top-level LICENSE file; migration preserves that source state rather than inventing licensing metadata.",
+      "integration_notes": "The native backend emits and loads shared libraries through the host C toolchain, while mini-elf-toolchain is a static ET_EXEC linker. No fake direct integration is claimed; a future edge requires a deliberate object/static-runtime or executable-artifact handoff.",
+      "attribution_notes": "Initial complete reachable-history scan passed. Refresh from 66ff2c6d... through 4690df57... separately scanned all newly reachable commits for configured attribution patterns, preserved the new source head as umbrella ancestry, matched the refreshed subtree blob-for-blob, and passed ruff/pytest from the umbrella path."
     }
   ]
 }
