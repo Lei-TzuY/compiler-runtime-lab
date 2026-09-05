@@ -1,0 +1,175 @@
+# Bootstrap Control-Flow Contract
+
+This document specifies the function-level control-flow graph (CFG) implemented
+by `nova-sema`. It is a compiler contract for the current executable subset, not
+a stable serialization format, MIR, backend IR, or promise about future public
+compiler APIs.
+
+## Purpose and boundary
+
+The analyzer builds one CFG per HIR function while it lowers source. Building
+the graph during lowering is deliberate: rejected aggregate/operator/call paths
+and statically skipped source may lose executable HIR structure, but Nova must
+still retain those paths for deterministic diagnostics without exporting their
+facts into reachable continuation.
+
+The graph exclusively owns definite-initialization state and diagnostic `N3009`.
+A resolved binding read keeps the binding's declared HIR type even when CFG analysis
+later rejects that read as maybe uninitialized. Type checking and flow checking are
+therefore orthogonal: an independently ill-typed use may report its ordinary type
+diagnostic alongside `N3009`, rather than relying on a hidden inline initialization
+bit to turn the read into recovery `<error>`.
+
+CFG data is exposed as a read-only Rust model on `AnalysisOutput`. It remains
+absent from semantic-inspection schema v1; explicitly selected schema v2 projects
+the verified graph through a separate tooling-owned model without declaring the
+Rust representation or a backend IR stable.
+
+## Graph shape
+
+Each graph has one `Entry`, zero or one normal `Exit` in the current structured
+lowerer, and deterministic graph-local node identities. Nodes represent:
+
+- branch-path entry and continuation joins;
+- binding initialization and resolved binding reads;
+- `return`, `break`, and `continue` transfers; and
+- normal function completion.
+
+Predecessor edges are recorded on each node. `Execution` edges represent a
+possible reachable continuation, `Diagnostic` edges retain statically checked
+source whose facts are discarded before reachable continuation, and `Backedge`
+edges return loop fallthrough or `continue` to the pre-test condition header.
+Closed side-effect-free condition refinements for `if`, `while`, and
+short-circuit operators, direct enum-constructor match selection, and
+non-continuing discriminators use diagnostic edges for successors that cannot
+execute. Closed-value reasoning may look through a nested block only when that
+block contains no statements: its tail must itself be a closed Bool, Int, Unit,
+or directly known payload-free enum value, while an empty statement-free block
+is the closed Unit value. The original block HIR is retained. Any statement in
+the block stops this structural proof without attempting purity analysis, and
+calls, binding reads, or other dynamic leaves remain runtime-evaluated.
+
+An invalid construct may leave a reachable-from-entry diagnostic subgraph with
+no continuation edge. This is intentional: rollback moves the lowering cursor
+back to the last valid state, but does not erase source events or binding
+identities needed for diagnostics.
+A `while` whose condition is rejected as non-`Bool` may likewise retain body
+nodes for static and lexical loop-control diagnostics, but that recovery-only
+body is not an executable loop iteration. Neither ordinary body fallthrough nor
+a retained `continue` receives a `Backedge` successor to the condition header;
+rejected control flow must not reconnect discarded recovery paths to reachable
+continuation.
+
+## Verification
+
+Before a graph becomes part of `AnalysisOutput`, the verifier rejects it unless:
+
+- the callable owner, every flow binding, and every binding read/initialize event
+  carry the same `ModuleId`, so a foreign same-index binding cannot alter dataflow;
+- entry and predecessor identities are in range;
+- the designated graph entry is the unique `Entry`-kind node, keeping the solver's
+  empty-lattice root aligned with the graph model;
+- node identities equal their deterministic vector positions;
+- only the entry lacks predecessors; every non-`Join` node has exactly one predecessor,
+  making `Join` the only legal merge point for multiple incoming paths;
+- each node's predecessor list contains no duplicate source/edge-class pair, keeping
+  the graph representation canonical before fixed-point dataflow or tooling projection;
+- every node is graph-reachable from the entry, including diagnostic source;
+- every node reachable from entry without crossing a `Diagnostic` edge has only
+  non-diagnostic predecessors that are themselves reachable on such executable flow;
+- binding metadata identities are strictly increasing, making the table canonical and
+  preventing duplicate identities from being silently overwritten during dataflow;
+- every read/initialization event names graph binding metadata;
+- the normal-exit table contains each `Exit` node exactly once and no other node;
+- every declared normal exit is executable-reachable and every `Exit` is terminal;
+- `return`, `break`, and `continue` successor edge classes respect their transfer
+  behavior; in particular, an executable successor of `break` must be a compiler-created
+  `Join`, so a loop exit cannot bypass the continuation merge while diagnostic-only
+  unreachable source may still follow the transfer through `Diagnostic` edges;
+- every `Backedge` targets an executable-reachable `Join` node and originates on the
+  same executable flow, so loop cycles cannot be attached to arbitrary nodes or live
+  only inside diagnostic recovery;
+- every `Join` that receives a `Backedge` also retains at least one earlier `Execution`
+  predecessor, preserving the loop's first-entry path in the fixed-point intersection
+  instead of allowing backedge-only loop headers to erase pre-iteration facts;
+- `Execution` and `Diagnostic` edges point strictly from lower to higher graph-local
+  node identities, while every `Backedge` points strictly from a higher identity to an
+  earlier loop-header `Join`, making the edge class the only legal encoding of a cycle;
+  and
+- a syntactic parent transfer does not append an execution node when evaluating its
+  child expression has already transferred control.
+
+An internal verification failure is fail-closed diagnostic `N3999`; no invalid
+graph is published for that function.
+The verifier computes this executable-reachability set independently of lowering.
+This makes diagnostic isolation a graph invariant rather than an analyzer convention:
+a discarded recovery subtree may branch away from executable flow, but it cannot feed
+an executable join, exit, or loop header through any edge class. The fixed-point
+must-analysis can therefore safely intersect every recorded predecessor without
+allowing recovery-only facts to constrain reachable continuation.
+Normal completion has a similarly closed contract. `normal_exits` is not advisory
+metadata: it must exactly enumerate the graph's `Exit` nodes without duplicates, each
+such node must belong to executable-reachable flow, and an `Exit` has no successor of
+any edge class. A diagnostic-only recovery path therefore cannot be mislabeled as a
+successful function completion, and post-exit diagnostic nodes cannot extend a graph
+past its terminal boundary.
+
+## Unreachable-code warning query
+
+After all graphs and semantic errors have been resolved, accepted analysis reuses
+the verifier's executable-edge interpretation for non-fatal diagnostic `N3033`.
+For every execution-reachable `return`, `break`, or `continue` node, the query
+examines direct `Diagnostic` successors and reports the earliest source span at
+most once. The transfer span is retained as a secondary label explaining why
+the selected region cannot execute.
+
+Diagnostic-only transfers never produce nested warnings, and any semantic error
+suppresses the warning pass. This keeps statically checked recovery source in the
+graph without cascading one warning from another unreachable region. The query
+does not currently warn for every node outside executable reachability: constant-
+selected branches and loops remain outside this deliberately narrow policy.
+
+## Definite-initialization dataflow
+
+For binding set `B`, the solver starts non-entry nodes at `B` and iterates
+downward to a fixed point. For each node `n`:
+
+```text
+IN[entry] = {}
+IN[n]     = intersection(OUT[p] for each predecessor p)
+OUT[n]    = IN[n] union {b}   when n initializes b
+OUT[n]    = IN[n]             otherwise
+```
+
+A read of `b` is accepted only when `b` belongs to `IN` at that read. Starting
+from the binding universe computes the conservative must-analysis fixed point;
+the function-entry path prevents loop-only initialization from becoming a fact
+on a zero-iteration exit. Parameters and initialized declarations create
+explicit initialization nodes. A successful, mutable, type-correct assignment
+does the same.
+
+Diagnostic-only reads are still checked and can produce `N3009`, matching Nova's
+policy that unreachable source receives deterministic static diagnostics.
+Diagnostic-only initialization nodes remain confined to discarded paths and are
+never joined into a reachable continuation by the structured builder.
+
+## Deliberate limitations
+
+The CFG currently carries only facts needed for local definite initialization.
+It does not encode value SSA, dominance, liveness, borrow/region facts, effects,
+exceptions, async suspension, pattern usefulness, optimization legality, or
+backend blocks. Loop reasoning remains the documented bootstrap rule: ordinary
+pre-test loops preserve the zero-iteration path, while a side-effect-free closed
+condition proven true may continue only through reachable `break` exits.
+
+Statement-free block transparency is intentionally structural rather than a purity
+analysis. The evaluator may recurse through zero-statement block tails while proving
+closed Bool/Int expressions, Unit values, or direct payload-free enum constructors,
+but it never removes those blocks from HIR. A single statement stops the proof even
+when that statement appears harmless. The evaluator does not execute calls, follow
+names, inspect mutable state, or infer that arbitrary same-typed expressions are
+constant; those cases remain runtime-evaluated.
+
+Additional flow-sensitive checks should migrate onto explicit analyses only when
+each has a specified lattice, verifier invariants, and adversarial tests; lexical
+resolution and HIR typing must not grow parallel hidden flow facts again.

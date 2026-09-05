@@ -1,0 +1,598 @@
+# Nova
+
+Nova is an early-stage programming-language project exploring whether one
+coherent language can combine fast, readable application development with
+predictable native performance and strong safety properties. Its intended
+design space includes static typing with inference, explicit optional values,
+algebraic data types, typed errors and effects, structured concurrency, and
+low-level control through narrowly classified `unsafe` capabilities.
+
+Those are design goals, not current claims. Nova is not production ready. The
+current bootstrap can interpret its small checked subset, but it does not yet
+implement ownership, effects, concurrency, native code generation, a standard
+library, or memory-safety analysis.
+
+## Current status
+
+The repository contains the Phase 0 constitution, the executable Phase 1
+frontend, Phase 2 semantic-core slices, and executable Phase 3 bootstrap
+interpreter slices. The toolchain is written in Rust and can:
+
+- read a Nova file or standard input while rejecting malformed UTF-8;
+- lex the documented v0.1 subset with byte-exact source spans;
+- parse functions, explicitly typed anonymous function expressions, recursive explicit function types,
+  nominal records and enums, UTF-8 string literals, explicit aggregate construction, exhaustive enum matching with payload discard, field projection,
+  initialized bindings, typed delayed `var` initialization, narrow assignments,
+  expressions, blocks, calls, `if` expressions, pre-test `while` loops, bare Unit
+  returns, and statement-only `break`/`continue`;
+- lower accepted syntax into a resolved, typed HIR whose function, closure,
+  binding, record, and enum identities are qualified by an explicit owning module,
+  with closure capture metadata plus verified callable CFGs;
+- resolve top-level functions and nominal types through an explicit per-module
+  namespace, plus parameters, lexical local bindings, record-field and enum-variant
+  name/slot identities, and match payload bindings;
+- check bootstrap `Int`, `UInt`, `Bool`, `String`, `Unit`, the uninhabited `!`
+  bottom type, nominal aggregate types, function
+  signatures, local inference and annotations, calls, operators, block tails, branches,
+  returns, loop conditions, loop-control legality, record construction/projection,
+  enum construction, match exhaustiveness and arm types, direct-constructor arm
+  usefulness, assignment mutability/type constraints, and CFG-based definite initialization;
+- execute semantically accepted programs through a deterministic bootstrap
+  interpreter with named functions, typed closures and capture-by-value environments,
+  recursion, Unit-valued procedures, records, enums, UTF-8 strings, pattern matching, mutation,
+  blocks, conditionals, bounded loops, and structured `break`/`continue`;
+- emit structured, coded compile-time and runtime diagnostics rendered as human
+  text or JSON Lines, including reachability and match-usefulness warnings;
+- print a deterministic debug representation of the parsed AST; and
+- emit fail-closed semantic-inspection v1 documents with resolved declarations,
+  bindings, types, spans, expression relationships, and exhaustive match facts,
+  plus explicitly selected v2 documents that add the verified CFG and v3 documents
+  that additionally expose explicit match payload modes without reinterpreting v1/v2 fields,
+  v4 documents that extend the program projection with String type/literal categories,
+  v5 documents that add closure definitions, captures, callable ownership, and verified closure CFGs,
+  v6 documents that expose single-module ownership without inventing import semantics,
+  and v7 documents that add the checked `UInt` type, unsigned constants, explicit
+  `Int`/`UInt` conversion expressions, and explicit by-value capture mode without
+  mutating the frozen v1-v6 contracts.
+
+`nova check` performs lexical, syntactic, name-resolution, bootstrap type, and
+definite-assignment validation. `nova run` performs those same checks and then
+executes zero-argument `main`. The interpreter is evidence for the executable
+subset, not a claim that Nova's final runtime representation, numeric model,
+aggregate layout, ABI, or backend is stable.
+
+Semantic warnings do not reject an otherwise valid program. The bootstrap reports
+`N3033` when the verified CFG proves that source follows an executable `return`,
+`break`, or `continue`, and `N3034` when a direct enum-constructor match scrutinee
+proves that an otherwise-valid concrete variant arm can never be selected. Warnings are
+written to standard error while `check`, `run`, or `inspect` continues normally. Any
+semantic error suppresses these deferred warnings to avoid recovery cascades. For strict
+CI, `--fail-on-warnings` makes warning-bearing semantic commands return status `1`
+without changing diagnostic severity; it also prevents `run` execution and `inspect`
+document output.
+
+The implemented syntax is intentionally small:
+
+```nova
+enum Result {
+    Empty,
+    Value(Int),
+}
+
+fn main() -> Int {
+    let result = Result::Value(42);
+    match result {
+        Result::Empty => 0,
+        Result::Value(value) => value,
+    }
+}
+```
+
+See [the implemented grammar](docs/grammar.md) for the normative frontend
+subset, [the enum and pattern semantics](docs/enums-and-patterns.md) for that
+aggregate slice's semantic contract,
+[the diagnostics contract](docs/diagnostics.md) for error/warning and exit-status
+behavior,
+[the semantic-introspection v1 contract](docs/semantic-introspection.md),
+[v2 CFG extension](docs/semantic-introspection-v2.md), and
+[v3 pattern extension](docs/semantic-introspection-v3.md), and
+[v4 String extension](docs/semantic-introspection-v4.md), and
+[v5 closure extension](docs/semantic-introspection-v5.md), and
+[v6 module-identity extension](docs/semantic-introspection-v6.md), and
+[v7 UInt extension](docs/semantic-introspection-v7.md) for the machine-readable
+tooling boundary,
+[the implemented numeric contract](docs/numeric-semantics.md),
+[the module-ready identity contract](docs/modules.md),
+[the bootstrap control-flow contract](docs/control-flow.md) for CFG verification
+and definite-initialization dataflow, and
+[the language constitution](docs/language-constitution.md) for decisions that
+extend beyond them.
+
+## Current semantic rules
+
+The Phase 2 bootstrap checker predeclares function signatures and nominal record
+and enum identities, so forward calls, recursion, forward aggregate type
+references, and recursive enum payload types resolve deterministically. A local
+initializer is checked before its new binding enters scope, preventing
+accidental self-reference. Duplicate names in the same lexical scope are
+rejected; nested lexical blocks may shadow outer bindings in this slice.
+Function parameters and a function body's outermost bindings share one scope.
+
+The current CLI places each source in one implicit root module. Semantic HIR identities
+are nevertheless `(ModuleId, local index)` pairs, and name collection is owned by an
+explicit per-module scope. `analyze_in_module` lets a future loader assign another
+session-local module identity without deriving meaning from a filename. CFG, interpreter,
+and inspection boundaries reject cross-module same-index identity drift. This foundation
+does not add module/import syntax, visibility, multi-file linking, or package semantics.
+
+Explicit function types use `fn(T1, T2) -> U` and may nest recursively in any type
+position. Named top-level functions and explicitly typed anonymous functions share those
+structural callable signatures, so either can be passed, returned, stored in typed locals,
+and invoked through values. Anonymous functions use `fn(name: Type, ...) -> Type { ... }`
+and capture outer bindings by value in first lexical-use order. Reading an enclosing mutable
+`var` takes a creation-time snapshot; later outer assignments do not change that captured value.
+Assigning through such a snapshot fails closed as `N3035`; no shared-cell or by-reference mutation
+semantics are inferred. Each anonymous-function evaluation creates a distinct closure instance,
+while aliases retain that instance identity. Methods and implicit callable conversions remain
+outside the bootstrap subset.
+
+`String` is an immutable UTF-8 bootstrap scalar. Literals admit unescaped non-control
+Unicode scalar values and the exact escapes `\\`, `\"`, `\n`, `\r`, `\t`, and `\0`;
+invalid escapes, raw control characters, and unterminated or multiline literals fail in
+the lexer. String values work in annotations and inference, calls and returns, records and
+enums, branches and matches, mutable slots, and `==` / `!=`. Equality compares decoded
+scalar sequences after left-to-right evaluation, and closed String values may refine
+control-flow proofs without folding retained HIR. Concatenation, indexing, interpolation,
+methods, standard-library APIs, allocation, layout, ownership, and ABI remain unspecified.
+
+The surface type `!` exposes the semantic core's existing uninhabited bottom type. A
+`fn forever() -> !` signature states that the function has no continuing return path; calls
+to such a function therefore fit any expected value position without manufacturing a value.
+`!` may appear in any type-reference position, including nested function types, but no
+ordinary runtime `Value` can inhabit it. A `-> !` body that falls through or produces a
+continuing tail is rejected, while proven non-continuation such as `while true {}` with no
+reachable `break` satisfies the contract. Every published semantic-inspection schema
+represents Never, so exposing the spelling did not change an inspection schema.
+
+A `Unit`-returning function may now write `return;` as the compact explicit form of
+returning Unit. Semantic analysis checks the bare form as `Unit` against the declared
+return type, so non-Unit functions receive the same `N3004` mismatch used for an explicit
+wrongly typed return expression. AST and HIR retain a bare return separately from
+`return ();`; the interpreter produces the ordinary `Value::Unit`, and the existing
+function-boundary conformance check still rejects malformed HIR that claims a different
+return type. Every published semantic-inspection schema models a return statement with zero child
+expressions, so this source distinction needs no schema version bump.
+
+Rejected calls are fail-closed for continuing flow recovery. Callees and arguments
+are still lowered left-to-right for deterministic diagnostics, but a non-callable
+callee, wrong arity, argument type mismatch, or erroneous argument yields Error HIR
+and cannot export assignments or loop-exit facts. An actually evaluated child that
+is already non-continuing keeps its `!` flow.
+
+Rejected field access follows the same recovery discipline. The base is evaluated
+first, but a continuing non-record base or unknown field yields Error HIR and cannot
+export flow facts produced only inside the rejected access. A base that is already
+non-continuing keeps `!` without a secondary field-type cascade.
+
+Rejected unary and binary operators are also fail-closed. Concrete operand type
+mismatches produce Error HIR rather than a nominal success type, and flow facts from
+a continuing rejected operator are rolled back. Non-continuation from an operand that
+must be evaluated keeps `!` precedence; short-circuit operators retain their existing
+conditional right-hand evaluation rules.
+
+Matching `Int`, `UInt`, `Bool`, `String`, and `Unit` values support `==` and `!=`. `Unit` has a
+single runtime value, so Unit equality is always true and Unit inequality is always false
+once both operands have evaluated normally. A nominal enum also supports equality when
+every declared variant is payload-free; operands must have the same enum identity and
+comparison uses the resolved variant slot. Function values are comparable only at the
+same fully resolved signature and compare top-level declaration identity. Direct top-level
+function-reference HIR retains the source-resolved spelling alongside `FunctionId`; runtime
+and semantic-inspection consumers recheck that name/id/signature contract, so malformed HIR
+cannot silently retarget a reference to a same-signature sibling declaration. Validated local
+aliases still carry only runtime declaration identity rather than source spelling. Enums with
+any payload variant and records remain non-comparable. Closed-condition analysis can prove
+literal Unit, direct payload-free enum-constructor, and direct function-reference
+comparisons; closed String literals and immutable aliases participate as well, while calls
+and mutable values remain dynamic and are still evaluated at runtime.
+
+Invalid continuing control conditions are fail-closed too. A non-Bool or erroneous
+`if` condition makes the expression Error-typed and discards condition/branch flow
+facts; a rejected `while` condition likewise cannot export pre-test initialization or
+loop exits. A condition that is already `!` keeps its non-continuation, while valid
+Bool conditions retain the established pre-test and branch dataflow rules.
+
+`record Name { field: Type, ... }` declares a nominal type: two separately
+declared records are distinct even if their fields have the same shape. Field
+names must be unique. `new Name { field: expression, ... }` must initialize every
+declared field exactly once with a value of the declared type. Named
+initializers may be written in any order, but their expressions evaluate left
+to right in written source order. HIR retains each resolved field spelling alongside
+the nominal record identity and declaration-order slot without reordering evaluation.
+The interpreter and semantic-inspection boundary independently recheck that name/slot
+pair, so malformed HIR cannot silently retarget one field to a same-typed sibling while
+the stable inspection schema continues to expose its existing declaration field ID.
+`value.field` is read-only field projection in this slice. Record equality,
+field assignment, layout, and ABI guarantees are not implemented.
+
+Rejected aggregate construction is fail-closed for continuing flow recovery. A
+record with an unresolved/non-record target or invalid field shape/type, or an enum
+constructor with invalid target/payload shape/type, may still emit deterministic
+child diagnostics, but assignments or loop
+exits created only inside that rejected continuing expression do not become
+post-expression facts. A child that is already non-continuing keeps its `!` flow.
+
+`enum Name { Empty, Value(Type) }` declares a nominal sum type whose variants
+carry zero or one payload in this slice. Construction is explicitly qualified as
+`Name::Empty` or `Name::Value(expression)`. A `match` scrutinee must have an enum
+type, every pattern must name a variant of that same nominal enum, and every
+variant must occur exactly once. A payload-bearing arm may bind the payload immutably
+for that arm or write `_` to discard it without introducing a binding. Payload-free variants
+accept neither form. HIR retains the source-resolved variant spelling/slot and explicit
+discard intent, so runtime and inspection trust boundaries reject identity or payload-mode
+drift instead of treating a deleted binding as discard. `_` here is not a catch-all arm: a
+bare wildcard/default pattern, guards, nested patterns, multi-payload variants, equality for
+payload-bearing enums, layout, and ABI guarantees remain unimplemented. Semantic-inspection
+v1/v2 deliberately reject discard-bearing matches with `N5001`; explicit v3 adds per-arm
+`none`/`bind`/`discard` facts while preserving the older schema meanings.
+
+`let` bindings and function parameters are immutable. `var` bindings may be
+assigned with the narrow statement form `name = expression;`. The target must
+resolve to a lexical `var`; functions, unknown names, `let` bindings, and
+parameters are rejected as assignment targets. The replacement value must keep
+the binding's established type. Resolved local/parameter reads and assignment targets
+retain the selected declaration's `BindingId`, source spelling, and declaration-name
+span in HIR. The declaration span is part of the integrity pair because nested scopes
+may legally shadow a binding with the same spelling and type; name/type alone cannot
+distinguish those declarations. This metadata does not alter lexical resolution, CFG
+binding IDs, or the semantic-inspection schema. Assignment is not an expression and
+therefore cannot be chained or embedded in another expression.
+
+A mutable local may also be declared as `var name: Type;` and initialized by a
+later assignment. The explicit type is required. Reading such a binding before
+it is definitely initialized is diagnostic `N3009`. For `if` expressions with a non-literal condition,
+analysis evaluates the branch states independently and keeps a binding
+initialized afterward only when every branch that can continue has initialized
+it. For a valid exhaustive match with a dynamic scrutinee, the same intersection
+rule applies across every arm that can continue. When the scrutinee is a direct,
+successfully resolved enum constructor, its variant is already known: only the
+selected arm may contribute definite-initialization, non-continuation, or loop-exit
+facts. Non-selected arms are still fully checked for pattern validity, static
+diagnostics, exhaustiveness, and arm type compatibility. A branch or reachable arm
+that returns, breaks, or continues does not constrain a surviving continuation.
+Unreachable code is still analyzed for deterministic diagnostics, but its
+assignments cannot manufacture reachable definite-initialization facts.
+For strict left-to-right expression forms, once an earlier subexpression cannot
+continue, later operands, call arguments, or record initializers are likewise
+lowered only for diagnostics and cannot create reachable scope or loop-exit
+facts.
+
+`&&` and `||` preserve static checking of both operands while modeling their
+runtime reachability explicitly. A direct `false && rhs` or `true || rhs` lowers
+`rhs` only for diagnostics, so skipped assignments and loop transfers contribute
+no reachable flow facts. A direct `true && rhs` or `false || rhs` treats `rhs` as
+mandatory. With a dynamic Boolean left operand, `rhs` is optional: post-expression
+definite initialization is the intersection of the short-circuit continuation
+and every continuing RHS path. An RHS that returns, breaks, or continues therefore
+does not make the whole Boolean expression non-continuing when the left operand
+can bypass it, although a reachable RHS `break` still remains a possible exit
+from its enclosing loop.
+
+A direct `if true` or `if false` refines control-flow reachability without
+turning the checker into a general constant folder. Only the selected branch may
+contribute definite-initialization, non-continuation, or loop-exit facts; the
+unselected branch is still lowered for deterministic static diagnostics and still
+participates in branch type compatibility. Block-valued or computed Boolean
+conditions keep the ordinary conservative two-branch merge.
+
+`while condition { body }` is a pre-test statement. The condition must be
+`Bool`. For an ordinary condition, the body may execute zero times, so
+definite-assignment facts established while evaluating the mandatory first
+condition test may survive the loop while facts established only inside the body
+do not. This preserves the zero-iteration exit rather than manufacturing
+initialization evidence.
+
+When the closed-condition evaluator proves a `while` condition true (for example
+`true` or the statement-free wrapper `{ true }`), the loop has no condition-false
+exit. The checker treats it as guaranteed-entry and records only reachable `break`
+transfers that target that exact loop. If there are such exits, a pre-existing
+binding is definitely initialized afterward only when it is initialized at every
+reachable break exit. If there is no reachable break, the loop is non-continuing.
+A `break` consumed by a nested loop does not count as an exit from an outer loop.
+This proof changes flow analysis only; the retained HIR is never constant-folded.
+
+`break;` and `continue;` are legal only inside an enclosing `while` body. The
+condition expression is intentionally outside that loop-control scope. `break;`
+exits the nearest enclosing loop; `continue;` skips the rest of the current
+iteration and re-evaluates that same loop's condition. Neither carries a value
+or acts as an expression. Labelled loops and value-carrying breaks are not part
+of the bootstrap subset.
+
+`Int`, `UInt`, `Bool`, `String`, `Unit`, and declared nominal records and enums are recognized
+surface types today. `()` is the sole Unit literal, and a block with no tail also
+produces Unit. A function declared `-> Unit` may fall through such a body or use
+the explicit `return ();` form; non-Unit functions still need a compatible tail or
+an explicit return on every continuing path. Arithmetic and ordered comparisons
+require matching `Int` or matching `UInt` operands; unary negation remains `Int`-only.
+Boolean operators require `Bool`; equality accepts matching `Int`, `UInt`, `Bool`,
+`String`, `Unit`, the same function signature, or
+the same nominal payload-free enum type; function equality compares declaration
+identity rather than addresses or code layout, and calls require matching arity and
+argument types.
+`if` conditions require `Bool`, and continuing branches or match arms must remain
+type-compatible. The surface `!` bottom type has no ordinary runtime value.
+
+These rules are bootstrap semantics, not a promise that Nova's broader type,
+mutation, control-flow, aggregate, and shadowing policies are frozen.
+
+## Bootstrap execution rules
+
+`nova run` requires one top-level `main` with no parameters and an `Int`, `UInt`, `Bool`,
+`String`, or `Unit` return type. A Unit-valued `main` prints `()` like any other returned
+bootstrap value. Execution evaluates expressions left to
+right. Record initializer
+expressions follow the same rule even when named fields are written out of
+declaration order. `&&` and `||` are short-circuiting, so a skipped right operand
+performs no mutation, call, return, or loop transfer. Semantic dataflow follows
+that same reachability while still type-checking the skipped source. A match
+evaluates its scrutinee exactly once and then only its selected arm.
+
+The interpreter propagates structured control flow through nested blocks,
+conditionals, aggregate initializers, call arguments, and selected match arms.
+`return` reaches the current function call. `break` and `continue` travel only
+to the nearest enclosing `while`; that loop consumes them by exiting or starting
+the next condition test. If malformed HIR lets loop control escape its lexical
+loop or cross a function boundary, execution fails closed with invariant
+diagnostic `N4005` rather than guessing a target.
+
+Function calls also validate the runtime/HIR type boundary. Every argument must
+recursively conform to its resolved parameter type, and every returned runtime
+value must recursively conform to the function's declared type. A direct top-level
+function reference additionally revalidates its retained source spelling against the
+referenced declaration's `FunctionId` before producing `Value::Function`; the ordinary
+expression postcondition then independently checks the declaration signature against
+the reference HIR type. Local aliases receive only that already-validated runtime
+identity. Nominal record and enum identities, record slots, and enum payloads are
+checked rather than trusted from their outer value tag alone. Valid semantically
+produced HIR is unaffected; malformed or contract-drifted HIR fails closed with `N4005`.
+
+Aggregate construction enforces the same invariant locally: each evaluated record
+field must conform to its declaration slot type, and each enum payload must conform
+to its selected variant payload type before the aggregate value is created. Record
+construction and projection also revalidate the HIR-resolved field spelling against
+its declaration-order slot, closing same-typed member-retargeting drift that a type
+postcondition alone cannot observe. Enum construction and matching apply the analogous
+variant spelling/slot check after payload or scrutinee evaluation has produced an ordinary
+value, preserving structured return/break/continue propagation before value-only invariant
+validation. These checks catch malformed HIR even when the aggregate never crosses a
+function boundary.
+
+Runtime frames preserve the resolved binding contract too. Each slot records its
+resolved type, mutability, initialization state, declaration spelling, and declaration
+span. Parameters, local bindings, delayed `var` declarations, and match payload bindings
+reject non-conforming initial values or incompatible reuse of one binding identity;
+repeated execution of the same lexical binding may refresh its slot only with identical
+type/mutability/name/span metadata. Binding reads revalidate the retained HIR reference
+against that slot before checking expression type and stored runtime-value conformance,
+so even same-name, same-type shadow retargeting fails closed. Assignment evaluates its
+RHS first; only an ordinary produced value triggers target identity, mutability, and
+replacement-type validation, preserving structured `return`/`break`/`continue` precedence.
+Any such interpreter/HIR drift fails closed with `N4005`.
+
+Every block and expression that completes with an ordinary runtime value also has a
+final interpreter postcondition: the value must recursively conform to that node's
+typed-HIR result type. Block checking includes function bodies, selected conditional
+branches, and executed loop bodies even when their result is discarded. Runtime
+conformance first validates the resolved type itself:
+nominal record/enum names must still match their declaration IDs, and function
+signatures recursively apply the same rule to parameter and return types. This closes
+a malformed-HIR gap where a record or enum value with the correct nominal ID could
+previously satisfy a drifted `Type::Record`/`Type::Enum` spelling. The same entry gate
+therefore protects local or discarded literals, projections, operators, blocks,
+conditionals, matches, call boundaries, frame storage, and aggregate nesting without
+changing the compact runtime value representation. Equality adds an operator-level
+precondition on ordinary value-producing paths as well: when both operands can complete
+normally, their resolved types must satisfy the same shared semantic comparability rule,
+including the declaration-wide payload-free requirement for enums. Malformed HIR therefore
+cannot compare a payload-free variant of an enum whose other variants carry payloads.
+A `Never` operand still evaluates normally for structured `return`, `break`, or `continue`
+propagation and never reaches the comparison itself. Structured transfers likewise bypass
+block and expression value postconditions until their owning function or loop consumes
+them. Any interpreter/HIR contract drift on a value-producing path fails closed with
+`N4005`.
+
+For deterministic execution while the numeric design remains provisional, integer
+literals may be decimal or use binary (`0b`/`0B`), octal (`0o`/`0O`), or hexadecimal
+(`0x`/`0X`) prefixes, with single `_` separators between digits. Lexing validates the
+selected radix and erases the source spelling after decoding every accepted form to the
+same checked magnitude. Positive `Int` literals end at `2^63 - 1`; magnitude `2^63`
+in any supported radix is reserved for prefix negation, so both
+`-9223372036854775808` and `-0x8000_0000_0000_0000` normalize to exact `Int::MIN`.
+Positive magnitude `2^63` is `N3030`; larger magnitudes are lexical `N1004`. The
+interpreter represents `Int` as signed 64-bit at runtime and uses checked arithmetic.
+Signed division truncates the quotient toward zero; a non-zero remainder has the
+same sign as the dividend and satisfies `a = (a / b) * b + (a % b)`. Both
+`i64::MIN / -1` and `i64::MIN % -1` are classified as integer overflow. Before
+execution, semantic analysis also preflights reachable deterministic arithmetic through
+a side-effect-free closed-HIR proof engine: statically certain overflow is `N3031` and
+a statically certain zero divisor is `N3032`. Literal arithmetic remains the simplest
+case, but the proof can also carry immutable closed `let` bindings through blocks,
+selected `if`/`match` values, selected enum payload bindings, record projections, and
+closed Bool/Unit/enum/function identity. Checked selector, aggregate, and composite-value
+boundaries preserve a deterministic arithmetic failure instead of degrading it to an
+unknown proof. Source lowered only for diagnostics because control flow proves it
+unreachable does not manufacture these execution-failure diagnostics.
+
+Execution-failure collection is statement-aware without making statements closed values.
+Initialized bindings and expression statements are scanned in source order; assignment RHS
+values, potentially executable `while` conditions and bodies, and value-bearing `return`
+expressions are inspected using the closed/static facts available at that program point.
+Delayed `var` declarations and ordinary assignments remain continuing but do not create new
+closed facts; an assignment RHS typed `!` or a `return`, `break`, or `continue` statement
+stops collection after the corresponding noncontinuing transfer. A proven-true `while`
+continues scanning its successor only when the body has a reachable `break` targeting that
+loop; breaks consumed by nested loops, statically unselected breaks, and loop-exit facts
+inside rejected expressions do not create a false successor.
+
+The same proof engine may refine `if`, `while`, short-circuit, and closed `match`
+reachability without folding retained HIR. Analyzer-side structural summaries are a
+separate, weaker fact system: immutable enum/record aliases and selected paths may retain
+a known enum variant or known record-field tags even when a payload or unrelated sibling
+is dynamic, but those tag facts never promote the dynamic payload/value itself to a
+constant. Calls, mutable bindings, assignment/loop/control-transfer effects, and genuinely
+dynamic operands stop the closed-value proof and remain runtime evaluated. A dynamic
+selector is different from a dynamic arithmetic operand: when a valid continuing `if`
+condition or `match` scrutinee is unknown, every potentially executable branch or arm is
+still inspected for deterministic arithmetic failures that depend only on closed facts
+already available outside that selector. This does not close the selector or any dynamic
+payload binding. More generally, when an `if`/`while` condition or `match` scrutinee is already
+non-continuing (`!`), its successor branches/body/arms are lowered only for static
+diagnostics: execution-only constant failures and flow mutations cannot come from a
+path runtime control never reaches. Successful constant arithmetic is not folded, and
+any expression with a dynamic operand remains runtime checked. Such
+dynamic overflow produces `N4002`; dynamic division or remainder by zero produces
+`N4003`. The arithmetic truth table itself lives once in the dependency-free
+`nova-int-semantics` leaf crate; semantic preflight supplies only closed-HIR traversal
+and the interpreter supplies only runtime diagnostic mapping. This keeps both layers
+on one checked signed-64 contract rather than duplicating host-edge-case policy.
+Recursive execution is guarded by a finite active-call budget
+and reports `N4004`. All statement/expression evaluation also shares a finite
+execution-step budget; a nonterminating loop therefore reports `N4006` instead
+of hanging indefinitely. Missing or invalid `main` is `N4001`. Record values
+currently use declaration-order slots; enum values use a variant slot and an
+optional boxed payload. Those interpreter-owned nominal representations are not
+stabilized source layouts, allocation promises, ownership rules, or ABI
+contracts.
+
+`UInt` is a distinct unsigned 64-bit family. Unsuffixed literals still default to
+`Int`; `UInt::MIN` and `UInt::MAX` expose `0` and `2^64 - 1`, and
+`UInt::from(Int)` / `Int::from_uint(UInt)` are the only implemented cross-family
+conversions. Same-family `UInt` arithmetic is checked, mixed-family operators are
+type errors, and failed conversions report `N4007` instead of wrapping or saturating.
+
+## Build and use
+
+Nova declares Rust 1.85 as its bootstrap minimum and also tracks current stable
+Rust in CI. With Rust and Cargo installed:
+
+```console
+cargo build --workspace
+cargo run -p nova-cli -- check examples/basics.nv
+cargo run -p nova-cli -- run examples/basics.nv
+cargo run -p nova-cli -- run examples/strings.nv
+cargo run -p nova-cli -- ast examples/basics.nv
+cargo run -p nova-cli -- inspect examples/enums.nv --format json
+cargo run -p nova-cli -- inspect examples/enums.nv --format json --schema-version 2
+cargo run -p nova-cli -- inspect examples/strings.nv --format json --schema-version 4
+cargo run -p nova-cli -- inspect examples/closures.nv --format json --schema-version 6
+printf 'fn main() -> UInt { UInt::MAX }\n' | cargo run -p nova-cli -- inspect - --format json --schema-version 7
+printf 'fn main() -> Int { 42 }\n' | cargo run -p nova-cli -- check - --source-name scratch/main.nv
+```
+
+The `run` command prints the returned value from `main`.
+
+Machine-readable diagnostics are available without changing the compiler's
+internal diagnostic model:
+
+```console
+cargo run -p nova-cli -- run examples/broken.nv --message-format json
+```
+
+The installed binary is named `nova`:
+
+```text
+nova check [--source-name name] [--message-format human|json] [--fail-on-warnings] [--] <file|->
+nova run [--source-name name] [--message-format human|json] [--fail-on-warnings] [--] <file|->
+nova ast [--source-name name] [--message-format human|json] [--] <file|->
+nova inspect --format json [--schema-version 1|2|3|4|5|6|7] [--source-name name] [--message-format human|json] [--fail-on-warnings] [--] <file|->
+```
+
+Each command accepts exactly one source operand. A filesystem path retains its written
+display name; `-` reads standard input to EOF and uses the stable display name `<stdin>` in
+human diagnostics, JSON Lines, and semantic-inspection documents. Both inputs pass through
+the same UTF-8 and compiler pipeline. Pipelines and editor integrations may give stdin a
+non-empty, single-line UTF-8 display name with `--source-name name` or
+`--source-name=name`. The option is invalid for filesystem input, and the supplied value is
+presentation metadata only: Nova neither reads nor canonicalizes it as a path or URI.
+Before the source operand, `--` ends option parsing. The next token is then interpreted as
+the source even when it begins with `-`, allowing invocations such as
+`nova run -- --program.nv`. No token after the terminator is treated as an option, and the
+exact operand `-` retains its standard-input meaning.
+
+Exit status `0` means the requested operation succeeded, `1` means the source or
+execution was rejected, and `2` means the command line was invalid. `nova ast`
+intentionally stops after parsing, so it can inspect a syntactically valid AST
+even when `nova check` or `nova run` would reject that program later.
+`nova inspect` instead requires the complete semantic pipeline to succeed and
+writes no partial document when source diagnostics or an inspection invariant
+failure occurs. Non-fatal warnings are written to standard error without changing
+status `0`, runtime output, or a successful inspection document. Schema v1 remains
+the default; v2 through v7 must be requested explicitly. A program containing `UInt`
+or a mutable-source snapshot capture requires v7; older representationally incomplete
+schemas fail closed with `N5001` rather than silently changing their contracts.
+With `--fail-on-warnings`, semantic
+warnings instead produce status `1` while retaining warning severity; `run` and `inspect`
+suppress their ordinary standard output. The option is invalid with `ast`, which does not
+perform semantic analysis.
+
+## Bootstrap architecture
+
+```text
+source bytes
+  -> nova-source        source identity, UTF-8 text, spans, locations
+  -> nova-lexer         tokens and lexical diagnostics
+  -> nova-parser        AST and syntactic diagnostics
+  -> nova-sema          typed HIR, verified CFG, resolution, typing, dataflow
+      -> nova-inspect       versioned facts and fail-closed JSON projection
+      -> nova-interpreter   deterministic checked, bounded HIR execution
+
+nova-int-semantics      dependency-free checked signed-64 arithmetic truth table
+nova-cli                check/run/ast/inspect orchestration and presentation
+
+nova-diagnostics        shared structured diagnostic model and renderers
+```
+
+Crate boundaries follow semantic responsibilities rather than intended future
+compiler passes. Later work can deepen HIR, inference, effects, MIR, layout, and
+backends without making the AST, interpreter, or CLI the owner of unfinished
+language semantics.
+
+## Engineering policy
+
+- Unsupported constructs are errors; the compiler does not approximate them.
+- Every implemented semantic, syntactic, or execution rule requires
+  deterministic tests.
+- Source positions are UTF-8 byte ranges internally and one-based line/column
+  locations when rendered.
+- Runtime arithmetic is checked; host build mode never decides Nova results.
+- Observable evaluation order is explicit; named record fields do not reorder
+  their initializer expressions, and a match evaluates only its selected arm.
+- Short-circuit reachability in semantic flow must agree with runtime `&&`/`||`
+  execution while skipped source remains statically checked.
+- Non-continuing control-flow paths cannot contribute definite-assignment or loop-
+  exit facts to code they cannot reach.
+- Non-fatal unreachable warnings are derived from verified CFG edges, not from a
+  parallel lexical reachability flag, and never turn accepted HIR into a rejection.
+- Function CFGs are verified before publication; `N3009` is produced by their
+  fixed-point must analysis rather than ad-hoc diagnostic emission during name lookup.
+- Definite initialization has no parallel lexical Boolean: binding HIR preserves the
+  declared type while CFG read/initialize events exclusively own flow validity.
+- Machine-readable semantics cross a separately versioned schema boundary;
+  debug AST/HIR output is never silently promoted into a tooling contract.
+- Potentially nonterminating bootstrap execution is bounded and fails with a
+  structured diagnostic rather than intentionally hanging the host.
+- CI checks Rust 1.85 compatibility, rejects formatting and Clippy warnings on
+  current stable, and runs all tests, builds, and rustdoc.
+- Roadmap status is evidence-based; planned properties are not reported as
+  implemented guarantees.
+
+The staged implementation plan is in [docs/roadmap.md](docs/roadmap.md).
+
+## Contributing
+
+Keep changes focused and pair grammar, semantic, or runtime changes with
+specification updates, positive tests, and negative tests. Prefer a small
+end-to-end slice over disconnected scaffolding for several future phases.
+
+No project license has been selected yet. Until a license file is added, the
+repository remains under the rights granted by applicable copyright law and
+GitHub's terms; do not infer an open-source license from public visibility.

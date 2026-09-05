@@ -1,0 +1,7 @@
+fn minimum() -> Int {
+    -9223372036854775808
+}
+
+fn main() -> Int {
+    -minimum()
+}
