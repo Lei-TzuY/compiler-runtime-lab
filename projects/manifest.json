@@ -17,7 +17,7 @@
       "merged_umbrella_sha": "7be12c6d2dc8cc10dbf386213064a1b809b7aea3",
       "umbrella_post_merge_ci_run_id": 33968264098,
       "repository_hygiene_notes": "Frozen source contains README, Cargo.lock, Cargo workspace, docs, examples and rust-toolchain metadata but no top-level LICENSE file; migration preserves that source state rather than inventing licensing metadata.",
-      "integration_notes": "Nova is imported as an independently testable typed language/compiler/runtime project. No mini-language-server dependency is claimed until that project is separately imported and an explicit semantic/diagnostic interoperability test is added.",
+      "integration_notes": "Nova is imported as an independently testable typed language/compiler/runtime project. Cross-project validation with mini-language-server remains a separate correctness milestone because the frozen language-server adapter does not yet parse Nova's normative typed function signature grammar.",
       "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry, the imported subtree matched source blob-for-blob, source-equivalent stable plus Rust 1.85 MSRV gates passed from the umbrella path, and the exact merged umbrella main passed all five permanent Nova jobs."
     },
     {
@@ -55,10 +55,15 @@
       "source_repository": "Lei-TzuY/mini-language-server",
       "target_path": "projects/mini-language-server",
       "observed_main_sha": "f8a4d642eaa721741ab3cea7eb02d2f261dbad01",
-      "status": "ready-for-import-prep",
+      "status": "imported-verified-pending-pr-merge",
       "blocker": null,
+      "imported_source_sha": "f8a4d642eaa721741ab3cea7eb02d2f261dbad01",
+      "verified_migration_branch_sha": "27c6d64d32308ec7edb7d806e0ff7fe5989e2ba7",
       "source_ci_run_id": 33967371120,
-      "attribution_notes": "Latest read-only preflight advanced to f8a4d642... with deterministic Nova unresolved-name diagnostics; exact CI is green and open PR count is zero. Run full reachable-history scan at freeze."
+      "verification_run_id": 33968415924,
+      "repository_hygiene_notes": "Frozen source contains README, docs, pyproject, src and tests but no top-level LICENSE file; migration preserves that source state exactly.",
+      "integration_notes": "The frozen source contains a bounded NovaFunctionAdapter with function/local/reference and nova.unresolved-name diagnostics. A cross-project audit found that its declaration regex currently accepts fn name(params) { ... } with bare parameters, while normative imported Nova requires typed parameters and an explicit -> return type. No full Nova-LSP interoperability is claimed until that grammar mismatch is implemented and regression-tested.",
+      "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry, the subtree matched source blob-for-blob, and Python 3.13 editable-install, ruff and pytest gates passed before publication. Permanent umbrella CI mirrors the source Ubuntu/Windows/macOS × Python 3.11/3.13 matrix."
     },
     {
       "name": "mini-debugger",
