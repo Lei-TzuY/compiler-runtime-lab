@@ -1,0 +1,118 @@
+import os
+import sys
+
+from assembler_address_space import (
+    validate_finalized_csect_ranges,
+    validate_source_start_address,
+)
+from assembler_semantics import (
+    validate_generated_object_semantics,
+    validate_initialized_storage,
+)
+from errors import AssemblyError
+from macro import default_macro_provenance_path, run_macro_processor
+from object_format import canonicalize_object_file, validate_source_object_contracts
+from pass1 import parse_line, run_pass1
+from pass2 import run_pass2
+from pass2_compat import prepare_pass2_inputs
+from source_map import SourceMapError, default_source_map_path
+from source_map_contract import write_object_aligned_source_map
+
+
+def _remove_files(paths):
+    for path in paths:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+
+
+def main(argv=None):
+    args = sys.argv[1:] if argv is None else argv
+    if len(args) != 1:
+        print("Usage: python assembler.py <source.asm>", file=sys.stderr)
+        return 1
+
+    asm_file = args[0]
+    base_name = os.path.splitext(asm_file)[0]
+
+    expanded_file = f"{base_name}.expanded.asm"
+    macro_provenance_file = default_macro_provenance_path(expanded_file)
+    int_file = f"{base_name}.int"
+    sym_file = f"{base_name}.sym"
+    obj_file = f"{base_name}.obj"
+    lst_file = f"{base_name}.lst"
+    source_map_file = default_source_map_path(obj_file)
+    generated_outputs = [
+        expanded_file,
+        macro_provenance_file,
+        int_file,
+        sym_file,
+        obj_file,
+        lst_file,
+        source_map_file,
+    ]
+
+    _remove_files(generated_outputs)
+
+    try:
+        print("Starting Macro Processor (Pass 0)...")
+        run_macro_processor(
+            asm_file,
+            expanded_file,
+            provenance_path=macro_provenance_file,
+        )
+        print(
+            f"Macro Processor completed. Generated: "
+            f"{expanded_file}, {macro_provenance_file}"
+        )
+
+        print("Validating object-program contracts...")
+        validate_source_object_contracts(expanded_file, parse_line)
+        validate_source_start_address(expanded_file, parse_line)
+
+        print("Starting Pass 1...")
+        csects, start_addr = run_pass1(expanded_file, int_file, sym_file)
+        validate_finalized_csect_ranges(csects)
+        validate_initialized_storage(expanded_file, int_file, parse_line)
+        print(f"Pass 1 completed. Found {len(csects)} CSECT(s).")
+
+        print("Starting Pass 2...")
+        pass2_int_file, pass2_csects, transient_file = prepare_pass2_inputs(
+            int_file,
+            csects,
+            parse_line,
+        )
+        try:
+            run_pass2(pass2_int_file, obj_file, lst_file, pass2_csects, start_addr)
+        finally:
+            if transient_file:
+                _remove_files([transient_file])
+        canonicalize_object_file(obj_file)
+        validate_generated_object_semantics(obj_file)
+        write_object_aligned_source_map(
+            expanded_file,
+            int_file,
+            obj_file,
+            csects,
+            parse_line,
+            source_map_file,
+            macro_provenance_path=macro_provenance_file,
+        )
+        print(
+            f"Pass 2 completed. Outputs generated: "
+            f"{int_file}, {sym_file}, {obj_file}, {lst_file}, {source_map_file}"
+        )
+        return 0
+    except AssemblyError as exc:
+        _remove_files(generated_outputs)
+        print(f"Assembly failed: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, SourceMapError, ValueError) as exc:
+        _remove_files(generated_outputs)
+        print(f"Assembly failed: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
