@@ -1,0 +1,170 @@
+#!/bin/bash
+set -e
+
+assert_abi() {
+  expected="$1"
+  input="$2"
+  printf "%s\n" "$input" > tmp-float-abi.c
+  "${MINICC:-./minicc}" tmp-float-abi.c > tmp-float-abi.s
+  gcc -o tmp-float-abi tmp-float-abi.s
+  set +e
+  ./tmp-float-abi
+  actual="$?"
+  set -e
+  if [ "$actual" != "$expected" ]; then
+    echo "FAIL(float ABI): expected $expected, got $actual"
+    echo "$input"
+    exit 1
+  fi
+  echo "OK(float ABI): $actual"
+}
+
+assert_abi 4 'double add(double a, double b) { return a+b; } int main() { return (int)add(1.5,2.5); }'
+assert_abi 6 'float mul(float a, float b) { return a*b; } int main() { return (int)mul(2.0f,3.0f); }'
+assert_abi 11 'double mix(int a, double b, int c, float d) { return a+b+c+d; } int main() { return (int)mix(1,2.5,3,4.5f); }'
+assert_abi 3 'double ret() { return 3.75; } int main() { return (int)ret(); }'
+assert_abi 5 'float retf() { return 2.5f; } int main() { return (int)(retf()*2.0f); }'
+assert_abi 6 'double twice(double x) { return x*2.0; } int main() { return (int)twice(3); }'
+assert_abi 3 'float idf(float x) { return x; } int main() { return (int)idf(3.75); }'
+assert_abi 5 'double twice(double x); int main() { return (int)twice(2.5); } double twice(double x) { return x*2.0; }'
+assert_abi 5 'double twice(double x) { return x*2.0; } int main() { double (*fp)(double)=twice; return (int)fp(2.5); }'
+assert_abi 28 'double many(int a,double b,int c,double d,int e,double f,int g) { return a+b+c+d+e+f+g; } int main() { return (int)many(1,2.0,3,4.0,5,6.0,7); }'
+assert_abi 36 'double sum8(double a,double b,double c,double d,double e,double f,double g,double h) { return a+b+c+d+e+f+g+h; } int main() { return (int)sum8(1,2,3,4,5,6,7,8); }'
+assert_abi 2 'int main() { double x=2.0; int n=0; for (;x;x-=1.0) n++; return n; }'
+assert_abi 1 'int sprintf(char *str, char *fmt, ...);
+int main() { char buf[32]; int n=sprintf(buf,"%.1f",2.5); return n==3 && buf[0]=='"'"'2'"'"' && buf[1]=='"'"'.'"'"' && buf[2]=='"'"'5'"'"'; }'
+assert_abi 1 'int sprintf(char *str, char *fmt, ...);
+int main() { char buf[32]; float x=2.5f; int n=sprintf(buf,"%.1f",x); return n==3 && buf[0]=='"'"'2'"'"' && buf[2]=='"'"'5'"'"'; }'
+
+# Existing integer-only generated variadic functions remain supported.
+assert_abi 10 '#include <stdarg.h>
+int sum(int count, ...) { va_list ap; va_start(ap,count); int s=0; for(int i=0;i<count;i++) s+=va_arg(ap,int); va_end(ap); return s; }
+int main() { return sum(4,1,2,3,4); }'
+
+# Cross the host/minicc boundary in both directions. Self-compiled caller/callee
+# tests can accidentally agree on the same incorrect SSE argument or return
+# convention, so use the host compiler as the independent ABI oracle here.
+cat > tmp-float-abi-mini-provider.c <<'EOF'
+double mini_mix(double a, float b, double c) { return a + b + c; }
+float mini_half(float x) { return x / 2.0f; }
+double mini_ninth(double a, double b, double c, double d, double e,
+                  double f, double g, double h, double i) {
+  return i;
+}
+double mini_neg_double(double x) { return -x; }
+float mini_neg_float(float x) { return -x; }
+double mini_nan_double(void) { return 0.0 / 0.0; }
+float mini_nan_float(void) { return 0.0f / 0.0f; }
+double mini_inf_double(void) { return 1.0 / 0.0; }
+float mini_inf_float(void) { return -1.0f / 0.0f; }
+EOF
+"${MINICC:-./minicc}" tmp-float-abi-mini-provider.c > tmp-float-abi-mini-provider.s
+gcc -c -o tmp-float-abi-mini-provider.o tmp-float-abi-mini-provider.s
+
+cat > tmp-float-abi-host-caller.c <<'EOF'
+double mini_mix(double, float, double);
+float mini_half(float);
+double mini_ninth(double, double, double, double, double,
+                  double, double, double, double);
+double mini_neg_double(double);
+float mini_neg_float(float);
+double mini_nan_double(void);
+float mini_nan_float(void);
+double mini_inf_double(void);
+float mini_inf_float(void);
+
+int main(void) {
+  union { double d; unsigned long long u; } dz;
+  union { float f; unsigned int u; } fz;
+
+  if (mini_mix(1.5, 2.0f, 4.5) != 8.0)
+    return 1;
+  if (mini_half(7.0f) != 3.5f)
+    return 2;
+  if (mini_ninth(1, 2, 3, 4, 5, 6, 7, 8, 9.5) != 9.5)
+    return 3;
+  if (mini_neg_double(2.25) != -2.25)
+    return 4;
+  if (mini_neg_float(1.5f) != -1.5f)
+    return 5;
+
+  dz.d = mini_neg_double(0.0);
+  if (dz.u != 0x8000000000000000ULL)
+    return 6;
+  fz.f = mini_neg_float(0.0f);
+  if (fz.u != 0x80000000U)
+    return 7;
+
+  if (mini_nan_double() == mini_nan_double())
+    return 8;
+  if (mini_nan_float() == mini_nan_float())
+    return 9;
+  if (!(mini_inf_double() > 1.0e300))
+    return 10;
+  if (!(mini_inf_float() < -1.0e30f))
+    return 11;
+  return 0;
+}
+EOF
+gcc -std=c11 -o tmp-float-abi-host-to-mini tmp-float-abi-host-caller.c tmp-float-abi-mini-provider.o
+./tmp-float-abi-host-to-mini
+
+echo 'OK(float ABI): host caller -> minicc callee'
+
+cat > tmp-float-abi-host-provider.c <<'EOF'
+double host_mix(double a, float b, double c) { return a + b + c; }
+float host_half(float x) { return x / 2.0f; }
+double host_ninth(double a, double b, double c, double d, double e,
+                  double f, double g, double h, double i) {
+  return i;
+}
+double host_nan_double(void) { return 0.0 / 0.0; }
+float host_nan_float(void) { return 0.0f / 0.0f; }
+double host_inf_double(void) { return 1.0 / 0.0; }
+float host_inf_float(void) { return -1.0f / 0.0f; }
+EOF
+gcc -std=c11 -c -o tmp-float-abi-host-provider.o tmp-float-abi-host-provider.c
+
+cat > tmp-float-abi-mini-caller.c <<'EOF'
+double host_mix(double, float, double);
+float host_half(float);
+double host_ninth(double, double, double, double, double,
+                  double, double, double, double);
+double host_nan_double(void);
+float host_nan_float(void);
+double host_inf_double(void);
+float host_inf_float(void);
+
+int main(void) {
+  double (*mixfp)(double, float, double) = host_mix;
+  double (*nandfp)(void) = host_nan_double;
+  float (*nanffp)(void) = host_nan_float;
+  if (mixfp(1.5, 2.0f, 4.5) != 8.0)
+    return 1;
+  if (host_half(7.0f) != 3.5f)
+    return 2;
+  if (host_ninth(1, 2, 3, 4, 5, 6, 7, 8, 9.5) != 9.5)
+    return 3;
+  if (nandfp() == nandfp())
+    return 4;
+  if (nanffp() == nanffp())
+    return 5;
+  if (!(host_inf_double() > 1.0e300))
+    return 6;
+  if (!(host_inf_float() < -1.0e30f))
+    return 7;
+  return 0;
+}
+EOF
+"${MINICC:-./minicc}" tmp-float-abi-mini-caller.c > tmp-float-abi-mini-caller.s
+gcc -o tmp-float-abi-mini-to-host tmp-float-abi-mini-caller.s tmp-float-abi-host-provider.o
+./tmp-float-abi-mini-to-host
+
+echo 'OK(float ABI): minicc caller -> host callee'
+
+rm -f tmp-float-abi-mini-provider.c tmp-float-abi-mini-provider.s tmp-float-abi-mini-provider.o \
+      tmp-float-abi-host-caller.c tmp-float-abi-host-to-mini \
+      tmp-float-abi-host-provider.c tmp-float-abi-host-provider.o \
+      tmp-float-abi-mini-caller.c tmp-float-abi-mini-caller.s tmp-float-abi-mini-to-host
+
+echo "All floating-point ABI tests passed!"
