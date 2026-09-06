@@ -9,7 +9,7 @@ This repository is intentionally assembled with **history-preserving migration**
 | Project | Role | Migration status |
 | --- | --- | --- |
 | [Nova](projects/Nova) | Typed language, semantic analysis, interpreter/runtime | **IMPORTED / VERIFIED** |
-| [tiny-c-compiler](https://github.com/Lei-TzuY/tiny-c-compiler) | Self-contained x86-64 C compiler | ATTRIBUTION REVIEW |
+| [tiny-c-compiler](projects/tiny-c-compiler) | Self-contained x86-64 C compiler | **IMPORTED / VERIFIED** |
 | [sic-xe-assembler](projects/sic-xe-assembler) | SIC/XE assembler and static-analysis tooling | **IMPORTED / VERIFIED** |
 | [mini-elf-toolchain](projects/mini-elf-toolchain) | ELF/static-linking toolchain | **IMPORTED / VERIFIED** |
 | [mini-language-server](projects/mini-language-server) | Version-safe semantic/LSP tooling | **IMPORTED / VERIFIED** |
@@ -36,7 +36,8 @@ compiler-runtime-lab/
     ├── mini-wasm-runtime/       # imported + verified
     ├── Nova/                    # imported + verified
     ├── mini-language-server/    # imported + verified
-    └── sic-xe-assembler/        # imported + verified
+    ├── sic-xe-assembler/        # imported + verified
+    └── tiny-c-compiler/         # imported + verified
 ```
 
 A project directory is created only by a verified history-preserving import. ZIP/download-and-copy commits are not used as a substitute for history.
@@ -58,6 +59,8 @@ A project directory is created only by a verified history-preserving import. ZIP
 `mini-language-server` was initially imported at source SHA `f8a4d642eaa721741ab3cea7eb02d2f261dbad01` and then non-squashed-refreshed through `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8`. The refreshed source remains reachable umbrella ancestry and matches source tree content exactly. Source PR/main CI and umbrella PR/main CI all pass Ubuntu/Windows/macOS × Python 3.11/3.13, and exact merged umbrella main also passes the bounded Nova ↔ LSP shared-source contract. The source contains no top-level LICENSE; that state is preserved.
 
 `sic-xe-assembler` was imported from frozen source SHA `a58f4b5c7f34675fddf437d4af596cd81b5d891f` after stale PR #30 was closed unmerged as superseded by the newer mainline analysis architecture. The history-preserving subtree commit keeps that exact source commit as its second parent and matches source tree `dbd346644c74ff713294d263ad69bfc7e0309e8b` exactly. Source freeze audit, ancestry/tree proof, Ubuntu/Windows × Python 3.10/3.13 unit gates, and Linux golden fixtures all pass on exact merged umbrella main.
+
+`tiny-c-compiler` was imported from frozen source SHA `5607c3152d319353c42f05ed44ff53479272a74f` with source history preserved exactly. A complete 272-commit reachable-history audit found exactly 24 historical `github-actions[bot]` co-author trailers and zero other attribution/AI markers; those CI-bot trailers are retained as an explicit legacy provenance exception rather than rewritten. Source GCC/Clang full suites and ASan+UBSan passed, the subtree preserves exact tree `a1a5b63e0abf0a9144af15fad09e290742d444d0`, and the same provenance/GCC/Clang/sanitizer gates pass on exact merged umbrella main. The existing mini-libc bootstrap chain remains a pinned Tiny-C contract unless separately rewired and re-proven against this subtree.
 
 ## Verified integration chains
 

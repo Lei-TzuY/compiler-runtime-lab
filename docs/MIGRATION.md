@@ -14,7 +14,7 @@ This document is the durable migration ledger for `compiler-runtime-lab`.
 | Project | Frozen / observed source `main` | Evidence | Status |
 | --- | --- | --- | --- |
 | Nova | `dcadc2238737b6f1e98887ab8fa658b23413d31b` | source CI `33920772855`; one-shot `33967555408`; PR 5/5; merged `7be12c6d...`; post-merge `33968264098` 5/5 | **IMPORTED / VERIFIED** |
-| tiny-c-compiler | `5607c3152d319353c42f05ed44ff53479272a74f` | reachable history includes `Co-authored-by: github-actions[bot]` | ATTRIBUTION REVIEW |
+| tiny-c-compiler | `5607c3152d319353c42f05ed44ff53479272a74f` | source CI `33611130023`; provenance/hygiene audit `34045875911`; bootstrap `34046028206`; PR `34046094212`; merged `336a8244...`; post-merge `34046180568` | **IMPORTED / VERIFIED** |
 | sic-xe-assembler | `a58f4b5c7f34675fddf437d4af596cd81b5d891f` | source CI `33555216616`; freeze audit `34044551045`; bootstrap `34044841065`; PR `34044965048`; merged `3633e53d...`; post-merge `34045041777` | **IMPORTED / VERIFIED** |
 | mini-elf-toolchain | `3d452a8681bbfb092cd41465dba6f6eb97dfd224` | complete history/tree/native Rust verification | **IMPORTED / VERIFIED** |
 | mini-language-server | `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8` | source PR/main six-way CI; refresh `33970141357`; umbrella PR/main six-way CI; Nova/LSP shared contract on PR and merged main | **IMPORTED / VERIFIED** |
@@ -171,6 +171,22 @@ Both imported projects now consume the same fixtures under `integration/nova-lsp
 
 This is a real executable cross-project contract, but it remains deliberately bounded. It does not claim complete Nova grammar/type-system/LSP parity.
 
+### tiny-c-compiler — VERIFIED 2026-09-07
+
+- Source SHA: `5607c3152d319353c42f05ed44ff53479272a74f`.
+- Source tree: `a1a5b63e0abf0a9144af15fad09e290742d444d0`.
+- Exact source-main CI: `33611130023`, GCC full suite, Clang full suite and ASan+UBSan PASS.
+- Provenance/hygiene audit: `34045875911`, PASS. It scanned all 272 commits reachable from the frozen source main.
+- Attribution policy result: exactly 24 `Co-authored-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>` trailers; Generated-By 0; Assisted-By 0; Signed-off-by 0; Claude/Anthropic/OpenAI 0; other attribution 0.
+- Policy decision: preserve those 24 historical GitHub Actions CI-bot trailers as canonical legacy provenance. Do not rewrite or falsify source history. New umbrella commits remain subject to the zero-attribution-trailer rule.
+- Bootstrap: `34046028206`, exact source/zero-open-PR recheck and history-preserving subtree import PASS.
+- Subtree commit: `ae0b349b4a32a1ce6464bddbb0d7b9dd98ac8691`; second parent is the exact frozen source SHA.
+- Cleaned migration head: `a8f7705578cfd8701fe9dcdf807a0b0beff3933c`.
+- Import PR #12 gate: `34046094212`, provenance + GCC + Clang + ASan/UBSan PASS.
+- Merged umbrella SHA: `336a8244c291910fc5cb2aadec91a3a7260ece16`.
+- Exact merged-main gate: `34046180568`, provenance + GCC + Clang + ASan/UBSan PASS.
+- Existing Tiny-C → mini-libc integration evidence remains a pinned compiler contract; this import does not silently claim that workflow has been rewired to the subtree.
+
 ### sic-xe-assembler — VERIFIED 2026-09-07
 
 - Source SHA: `a58f4b5c7f34675fddf437d4af596cd81b5d891f`.
@@ -206,6 +222,18 @@ The SIC/XE follow-on checkpoint extends, rather than rewrites, the original seve
 - the stale SIC/XE implementation PR was closed unmerged instead of reintroducing superseded architecture;
 - `tiny-c-compiler` is now the sole remaining migration exception and stays under explicit attribution review;
 - no genuine authorship metadata has been silently rewritten.
+
+## Nine-project checkpoint — COMPLETE 2026-09-07
+
+The originally planned compiler/runtime migration set is now complete:
+
+- all nine projects are history-preserved and independently verified in the umbrella;
+- Tiny-C's only blocker was resolved by an explicit preserve-not-rewrite legacy CI-bot provenance policy;
+- exact source, import-PR and exact merged-main gates are green for the final project;
+- no genuine authorship metadata was rewritten;
+- no new integration claim was invented merely because the final subtree now exists.
+
+The earlier seven-project and eight-project checkpoints remain valid historical milestones rather than being rewritten retroactively.
 
 ## Source repository retirement policy
 

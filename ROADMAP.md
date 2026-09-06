@@ -10,7 +10,7 @@
 ## Phase 1 — Source preflight and freeze points
 
 - [x] Nova — frozen at `dcadc2238737b6f1e98887ab8fa658b23413d31b`; exact source/open-PR/CI, complete reachable-history attribution, tree equivalence, stable gates and Rust 1.85 MSRV passed.
-- [ ] tiny-c-compiler — resolve/accept bot co-author history policy before import.
+- [x] tiny-c-compiler — frozen at `5607c3152d319353c42f05ed44ff53479272a74f`; 272-commit provenance audit accepts exactly 24 historical GitHub Actions bot co-author trailers as a preserved legacy exception, with zero other attribution/AI markers; exact source and imported-main gates are green.
 - [x] sic-xe-assembler — frozen at `a58f4b5c7f34675fddf437d4af596cd81b5d891f`; stale PR #30 closed unmerged after supersession audit, source freeze audit passed, and exact imported-main verification is green.
 - [x] mini-elf-toolchain — frozen at `3d452a8681bbfb092cd41465dba6f6eb97dfd224`.
 - [x] mini-language-server — initially imported at `f8a4d642eaa721741ab3cea7eb02d2f261dbad01` and non-squashed-refreshed through `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8`; source PR/main six-way CI, refresh ancestry/tree equivalence, umbrella six-way CI, and shared Nova/LSP integration all passed.
@@ -28,12 +28,12 @@
 5. [x] `mini-wasm-runtime` — **IMPORTED / VERIFIED**
 6. [x] `Nova` — **IMPORTED / VERIFIED**
 7. [x] `mini-language-server` — **IMPORTED / VERIFIED**; source refresh and exact merged-main six-way + Nova/LSP integration proof complete
-8. [ ] `tiny-c-compiler` after attribution policy is resolved
+8. [x] `tiny-c-compiler` — **IMPORTED / VERIFIED**; canonical history preserved without rewrite, legacy CI-bot provenance exception machine-checked, GCC/Clang/sanitizer gates green
 9. [x] `sic-xe-assembler` — **IMPORTED / VERIFIED**; preserved source ancestry/tree identity and exact merged-main four-way Python verification complete
 
-The original first-seven flagship checkpoint remains a historical milestone. `sic-xe-assembler` has now advanced beyond that checkpoint as the eighth history-preserved, verified import; `tiny-c-compiler` is the sole remaining migration exception pending explicit attribution policy.
+The original first-seven flagship checkpoint and the later SIC/XE eight-project checkpoint remain historical milestones. `tiny-c-compiler` has now resolved the final migration exception through an explicit preserve-not-rewrite provenance policy.
 
-Eight projects now preserve source history and verified source trees in the umbrella. The Nova ↔ mini-language-server shared-source semantic contract remains the verified compiler/language-tooling integration edge.
+All nine planned projects now preserve source history and verified source trees in the umbrella. Existing executable integration claims remain bounded to the evidence actually exercised by their workflows; importing Tiny-C does not by itself rewire the previously pinned Tiny-C → mini-libc chain.
 
 ## Phase 3 — Umbrella integration
 
@@ -112,6 +112,17 @@ The post-flagship SIC/XE checkpoint is complete:
 - [x] import SIC/XE with preserved ancestry and exact tree identity;
 - [x] verify Ubuntu/Windows × Python 3.10/3.13 plus Linux golden fixtures on PR head and exact merged umbrella main;
 - [x] leave `tiny-c-compiler` as the sole explicit pending attribution-policy exception.
+
+## Phase 4B — Nine-project checkpoint
+
+The planned compiler/runtime migration set is complete:
+
+- [x] freeze `tiny-c-compiler@5607c3152d319353c42f05ed44ff53479272a74f` with exact source CI and zero open source PRs;
+- [x] audit all 272 canonical commits and preserve exactly 24 historical `github-actions[bot]` co-author trailers as an explicit legacy provenance exception;
+- [x] verify zero Generated-By, Assisted-By, Signed-off-by, Claude, Anthropic, OpenAI or other attribution hits;
+- [x] import Tiny-C with exact source ancestry and tree identity;
+- [x] pass provenance, GCC, Clang and ASan+UBSan gates on the import PR and exact merged umbrella main;
+- [x] reach 9/9 history-preserved, independently verified planned imports without rewriting genuine source history.
 
 ## Phase 5 — Portfolio consolidation
 
