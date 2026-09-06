@@ -1,0 +1,41 @@
+name: Tensor ELF integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'integration/tensor-elf/**'
+      - 'projects/tiny-tensor-compiler/**'
+      - 'projects/tiny-c-compiler/**'
+      - 'projects/mini-libc/**'
+      - 'projects/mini-elf-toolchain/**'
+      - '.github/workflows/tensor-elf-integration.yml'
+  pull_request:
+    paths:
+      - 'integration/tensor-elf/**'
+      - 'projects/tiny-tensor-compiler/**'
+      - 'projects/tiny-c-compiler/**'
+      - 'projects/mini-libc/**'
+      - 'projects/mini-elf-toolchain/**'
+      - '.github/workflows/tensor-elf-integration.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  tensor-elf:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout umbrella
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install tiny tensor compiler
+        run: python -m pip install -e projects/tiny-tensor-compiler
+
+      - name: Build and execute tensor ELF contract
+        run: bash integration/tensor-elf/verify.sh
