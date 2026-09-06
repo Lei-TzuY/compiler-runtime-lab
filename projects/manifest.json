@@ -76,6 +76,7 @@
       "imported_source_sha": "3d452a8681bbfb092cd41465dba6f6eb97dfd224",
       "verified_umbrella_sha": "baa897d1f5c972b8a1854b0202de67d7c4cd2597",
       "verification_run_id": 33925540855,
+      "integration_notes": "Participates in verified executable contracts with mini-libc/Tiny-C, mini-debugger, and the bounded tiny-tensor object handoff. PR #15 links a generated tensor object together with imported mini-libc startup/runtime artifacts into a real ELF64 ET_EXEC and executes it successfully.",
       "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry and the imported tree was verified blob-for-blob."
     },
     {
@@ -134,7 +135,7 @@
       "imported_tiny_c_chain_pr_number": 14,
       "imported_tiny_c_chain_pr_ci_run_id": 34057835648,
       "repository_hygiene_notes": "Frozen source contains README/docs/Makefile but no top-level LICENSE file; migration preserved the source tree exactly and did not invent licensing metadata.",
-      "integration_notes": "Permanent umbrella CI now builds projects/tiny-c-compiler/minicc directly, compiles mini-libc with that imported compiler, and also links the resulting objects/archive with the imported mini-elf-toolchain. PR #14 head run 34057835648 passes both executable paths plus host-libc-independence inspection. The mini-libc workflow is path-scoped to tiny-c-compiler, mini-libc and mini-elf-toolchain so changes on any side re-run the contract.",
+      "integration_notes": "Permanent umbrella CI now builds projects/tiny-c-compiler/minicc directly, compiles mini-libc with that imported compiler, and also links the resulting objects/archive with the imported mini-elf-toolchain. PR #14 head run 34057835648 passes both executable paths plus host-libc-independence inspection. PR #15 additionally reuses the imported mini-libc startup/runtime artifacts in the bounded tiny-tensor object -> mini-ELF executable contract. The mini-libc workflow is path-scoped to tiny-c-compiler, mini-libc and mini-elf-toolchain so changes on any side re-run the original contract.",
       "attribution_notes": "Complete reachable source main history scan passed before import; no configured attribution patterns matched. Source history is retained as umbrella ancestry, the subtree matched source blob-for-blob, and permanent umbrella CI passed GCC, Clang, tiny-c bootstrap, and imported mini-elf integration."
     },
     {
@@ -170,8 +171,12 @@
       "refresh_verification_run_id": 33966522648,
       "merged_umbrella_sha": "ae03589a39a36d2df8e8220d933471722708cedc",
       "umbrella_post_merge_ci_run_id": 33966708522,
+      "tensor_elf_integration_pr_number": 15,
+      "tensor_elf_integration_pr_ci_run_id": 34063095036,
+      "tensor_elf_integration_merged_umbrella_sha": "b7b8953712b6a496e33c7e30e9d44669a6c95b62",
+      "tensor_elf_integration_post_merge_ci_run_id": 34063270273,
       "repository_hygiene_notes": "Source has README, CHANGELOG, docs, pyproject and project metadata but no top-level LICENSE file; migration preserves that source state rather than inventing licensing metadata.",
-      "integration_notes": "The native backend emits and loads shared libraries through the host C toolchain, while mini-elf-toolchain is a static ET_EXEC linker. No fake direct integration is claimed; a future edge requires a deliberate object/static-runtime or executable-artifact handoff.",
+      "integration_notes": "The source native backend still builds shared libraries through the host C toolchain, but the umbrella now has a separate bounded static executable handoff. PR #15 generates a deterministic int32 elementwise-add C ABI artifact from the imported tiny-tensor-compiler, compiles that generated C with the host freestanding C compiler to a relocatable x86-64 object with no unresolved symbols, compiles the harness and mini-libc with imported Tiny-C, links tensor.o + harness + crt0 + imported mini-libc through imported mini-elf-toolchain, executes the resulting ELF64 ET_EXEC, requires exact tensor results and tensor-elf-ok, and verifies host-libc independence. This does not claim that Tiny-C compiles generated tensor C or that every tensor backend artifact is mini-ELF compatible.",
       "attribution_notes": "Initial complete reachable-history scan passed. Refresh from 66ff2c6d... through 4690df57... separately scanned all newly reachable commits for configured attribution patterns, preserved the new source head as umbrella ancestry, matched the refreshed subtree blob-for-blob, passed ruff/pytest from the umbrella path, and the merged umbrella main passed the full Ubuntu/Windows × Python 3.11/3.13 matrix."
     }
   ]
