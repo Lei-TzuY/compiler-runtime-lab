@@ -1,0 +1,187 @@
+#!/bin/bash
+set -eu
+
+MINICC=${MINICC:-./minicc}
+
+assert_run() {
+  expected="$1"
+  input="$2"
+  printf '%s\n' "$input" > tmp-vla.c
+  "$MINICC" tmp-vla.c > tmp-vla.s
+  cc -o tmp-vla tmp-vla.s
+  set +e
+  ./tmp-vla
+  actual="$?"
+  set -e
+  if [ "$actual" != "$expected" ]; then
+    echo "FAIL(VLA): expected $expected, got $actual"
+    echo "$input"
+    exit 1
+  fi
+  echo "OK(VLA): $actual"
+}
+
+assert_reject() {
+  input="$1"
+  printf '%s\n' "$input" > tmp-vla-bad.c
+  if "$MINICC" tmp-vla-bad.c > /dev/null 2>tmp-vla.err; then
+    echo 'FAIL(VLA): expected rejection'
+    echo "$input"
+    exit 1
+  fi
+  echo 'OK(VLA): rejected unsupported/invalid form'
+}
+
+# Basic automatic runtime extent, indexing, and decay.
+assert_run 7 'int main(void){int n=5;int a[n];a[0]=3;a[4]=4;return a[0]+a[n-1];}'
+
+# A declaration bound is evaluated exactly once. sizeof(object) keeps the saved
+# allocation extent even when the source variable changes afterward.
+assert_run 0 'int main(void){int n=3;int a[n++];if(n!=4)return 1;n=8;return sizeof a==12?0:2;}'
+
+# sizeof(VLA) keeps the target LP64 size_t type, while a VLA type-name evaluates
+# its bound when the sizeof expression executes.
+assert_run 0 'int main(void){int n=6;int a[n];return _Generic(sizeof a,unsigned long:0,default:1);}'
+assert_run 0 'int main(void){int n=7;return sizeof(int[n])==28?0:1;}'
+assert_run 0 'int main(void){int n=3;unsigned long x=sizeof(int[n++]);return x==12&&n==4?0:1;}'
+
+# Unlike sizeof(VLA), _Alignof(type-name) never evaluates a variably-modified
+# bound expression; only the completed element type's alignment is queried.
+assert_run 0 'int main(void){int n=3;unsigned long a=_Alignof(int[n++]);return a==4&&n==3?0:1;}'
+assert_run 0 'int main(void){int n=5;unsigned long a=_Alignof(double[++n]);return a==8&&n==5?0:1;}'
+
+# Outer runtime dimension with a fixed inner stride remains ordinary C pointer
+# arithmetic after decay.
+assert_run 0 'int main(void){int n=3;int a[n][4];a[2][3]=9;return sizeof a==48&&a[2][3]==9?0:1;}'
+
+# Non-scalar complete element types use their compile-time stride.
+assert_run 0 'struct S{long x;};int main(void){int n=3;struct S a[n];a[2].x=11;return sizeof a==24&&a[2].x==11?0:1;}'
+
+
+# Every variably-modified dimension has an allocation-time byte extent. This
+# enables true runtime row/plane strides rather than requiring fixed inner sizes.
+assert_run 0 'int main(void){int n=3,m=5;int a[n][m];a[2][4]=17;return sizeof a==60&&sizeof a[0]==20&&a[2][4]==17?0:1;}'
+assert_run 0 'int main(void){int n=4;int a[3][n];a[2][3]=11;return sizeof a==48&&sizeof a[0]==16&&a[2][3]==11?0:1;}'
+assert_run 0 'int main(void){int x=2,y=3,z=4;int a[x][y][z];a[1][2][3]=23;return sizeof a==96&&sizeof a[0]==48&&sizeof a[0][0]==16&&a[1][2][3]==23?0:1;}'
+
+# Bounds are saved once. Later mutation must not change object sizeof or row
+# stride, and sizeof(type-name) recursively evaluates all runtime dimensions.
+assert_run 0 'int main(void){int n=2,m=3;int a[n++][m++];if(n!=3||m!=4)return 1;n=9;m=10;a[1][2]=7;return sizeof a==24&&sizeof a[0]==12&&a[1][2]==7?0:2;}'
+assert_run 0 'int main(void){int n=2,m=3;unsigned long s=sizeof(int[n][m]);return s==24?0:1;}'
+assert_run 0 'int main(void){int n=2,m=3;unsigned long a=_Alignof(int[n++][m++]);return a==4&&n==2&&m==3?0:1;}'
+
+# Pointer-to-VLA objects use the saved runtime row extent for indexing,
+# increment/decrement, compound arithmetic and pointer difference.
+assert_run 0 'int main(void){int n=3,m=4;int a[n][m];int (*p)[m]=a;p[2][3]=19;return sizeof *p==16&&a[2][3]==19?0:1;}'
+assert_run 0 'int main(void){int n=4,m=3;int a[n][m];int (*p)[m]=a;int (*q)[m]=p;p++;p+=2;return p-q==3?0:1;}'
+assert_run 0 'int main(void){int n=4,m=3;int a[n][m];int (*p)[m]=a+3;p--;return p-a==2?0:1;}'
+
+# Callee-side parameter adjustment retains inner VLA dimensions. Their bounds
+# are rebound to the real parameter locals and materialized before the body.
+assert_run 0 'int get(int n,int m,int a[n][m]){return sizeof a[0]==(unsigned long)m*4&&a[n-1][m-1]==29?0:1;}int main(void){int n=3,m=5;int a[n][m];a[2][4]=29;return get(n,m,a);}'
+assert_run 0 'int get(int m,int (*p)[m]){p++;return sizeof *p==(unsigned long)m*4&&p[-1][m-1]==31?0:1;}int main(void){int n=2,m=6;int a[n][m];a[0][5]=31;return get(m,a);}'
+assert_run 0 'int get(int x,int y,int z,int a[x][y][z]){return a[1][2][3]==37&&sizeof a[0]==(unsigned long)y*z*4?0:1;}int main(void){int a[2][3][4];a[1][2][3]=37;return get(2,3,4,a);}'
+
+# The outermost array parameter still adjusts to a pointer when `static` carries
+# a runtime minimum bound, while the inner VLA dimension keeps its row stride.
+assert_run 0 'int get(int n,int m,int a[static n][m]){return sizeof a==8&&sizeof a[0]==(unsigned long)m*4&&a[n-1][m-1]==41?0:1;}int main(void){int n=3,m=7;int a[n][m];a[2][6]=41;return get(n,m,a);}'
+
+# Array bounds use the full assignment-expression grammar. Runtime side
+# effects occur once for a VLA/sizeof, while _Alignof still does not evaluate it.
+assert_run 0 'int main(void){int n=2;int a[n+=2];return n==4&&sizeof a==16?0:1;}'
+assert_run 0 'int main(void){int n=2;unsigned long s=sizeof(int[n=5]);return s==20&&n==5?0:1;}'
+assert_run 0 'int main(void){int n=3;unsigned long a=_Alignof(int[n+=2]);return a==4&&n==3?0:1;}'
+
+# Dynamic allocations satisfy the element alignment and preserve call ABI
+# alignment because every stack decrement is rounded to 16 bytes.
+assert_run 0 'int check(double *p){return ((unsigned long)p)&7;}int main(void){int n=5;double a[n];return check(a);}'
+assert_run 0 'long add(long a,long b,long c,long d,long e,long f,long g){return a+b+c+d+e+f+g;}int main(void){int n=5;char a[n];a[0]=1;return add(1,2,3,4,5,6,7)==28&&a[0]==1?0:1;}'
+
+# Earlier declarators and their initializers are visible to later VLA bounds in
+# the same declaration and execute before the allocation.
+assert_run 0 'int main(void){int n=4,a[n];a[3]=7;return sizeof a==16&&a[3]==7?0:1;}'
+
+# Nested blocks restore RSP every iteration instead of leaking dynamic stack.
+assert_run 0 'int main(void){long sum=0;for(int i=0;i<6000;i++){int n=512;int a[n];a[0]=i;sum+=a[0]&1;}return sum==3000?0:1;}'
+
+# Continue and break unwind every exited VLA scope before transferring control.
+assert_run 0 'int main(void){int hit=0;for(int i=0;i<6000;i++){int n=256;int a[n];a[0]=i;if(i&1)continue;hit+=a[0]>=0;}return hit==3000?0:1;}'
+assert_run 0 'int main(void){int hit=0;for(int i=0;i<5000;i++){while(1){int n=256;int a[n];a[0]=i;hit+=a[0]>=0;break;}}return hit==5000?0:1;}'
+
+# A VLA declared in a for-init scope remains alive for the loop and is restored
+# once at the common loop exit.
+assert_run 0 'int main(void){int out=0;for(int n=4,a[n];n==4;n=0){a[3]=9;out=a[3]+(sizeof a==16);}return out==10?0:1;}'
+
+# Parameter array adjustment accepts runtime bounds, static runtime bounds, and
+# prototype-scope [*]. Earlier parameter names are visible in later bounds.
+assert_run 0 'int last(int n,int a[n]){return a[n-1];}int main(void){int a[4]={1,2,3,9};return last(4,a)==9?0:1;}'
+assert_run 0 'int first(int n,int a[static n]){return a[0];}int main(void){int a[3]={8,2,1};return first(3,a)==8?0:1;}'
+assert_run 0 'int sum(int n,int a[*]);int sum(int n,int a[]){int s=0;for(int i=0;i<n;i++)s+=a[i];return s;}int main(void){int a[3]={2,3,4};return sum(3,a)==9?0:1;}'
+assert_run 0 'int pick(int n,int a[const restrict n]){return a[n-1];}int main(void){int a[2]={3,7};return pick(2,a)==7?0:1;}'
+
+# Block-scope variably-modified typedefs evaluate their bounds exactly once at
+# the typedef declaration. Objects and sizeof(type-name) reuse the saved extent.
+assert_run 0 'int main(void){int n=3;typedef int A[n++];if(n!=4)return 1;n=9;A a;a[2]=7;return sizeof(A)==12&&sizeof a==12&&a[2]==7?0:2;}'
+
+# Multidimensional VM typedefs preserve every saved runtime stride and work with
+# pointer-to-VLA indexing without re-evaluating either bound.
+assert_run 0 'int main(void){int n=2,m=3;typedef int A[n++][m++];if(n!=3||m!=4)return 1;n=8;m=9;A a;int (*p)[3]=a;p[1][2]=11;return sizeof(A)==24&&sizeof(*p)==12&&a[1][2]==11?0:2;}'
+
+# A typedef derived from an existing VM typedef reuses the original saved extent
+# rather than replaying its bound expression.
+assert_run 0 'int main(void){int n=2;typedef int A[n++];if(n!=3)return 1;typedef A B;if(n!=3)return 2;A a;B b;a[1]=4;b[1]=5;return sizeof(A)==8&&sizeof(B)==8&&a[1]+b[1]==9?0:3;}'
+
+# Multiple VM declarators in one typedef declaration are materialized in source
+# order and retain independent allocation-time extents.
+assert_run 0 'int main(void){int n=2;typedef int A[n++],B[n++];return n==4&&sizeof(A)==8&&sizeof(B)==12?0:1;}'
+
+# Nested typedef scopes may shadow one another; each scope owns its own saved
+# bound while an outer VM typedef remains valid after the nested scope exits.
+assert_run 0 'int main(void){int n=2;typedef int A[n];int outer=sizeof(A);{int m=3;typedef int A[m];A x;if(sizeof x!=12)return 1;}A y;return outer==8&&sizeof y==8?0:2;}'
+
+# Pointer types derived from VM typedefs use the typedef's saved row stride for
+# pointer arithmetic and sizeof after the source bound variable changes.
+assert_run 0 'int main(void){int m=3;typedef int Row[m++];if(m!=4)return 1;Row a[2];Row *p=a;m=9;p[1][2]=13;return sizeof(Row)==12&&p[1][2]==13&&p-a==0?0:2;}'
+
+# goto obeys the C variably-modified scope rule instead of being rejected for
+# the whole function. Forward jumps within an already-active VLA scope preserve
+# the allocation, while outward jumps release dynamic storage.
+assert_run 0 'int main(void){int n=5;int a[n];a[4]=9;goto done;a[4]=1;done:return sizeof a==20&&a[4]==9?0:1;}'
+assert_run 0 'int main(void){int n=512;int i=0;again:if(i==6000)return 0;int a[n];a[0]=i++;goto again;}'
+
+# A label between two VLAs is a fine-grained dynamic-stack frontier: jumping
+# back to it releases only the later VLA and keeps the earlier object alive.
+assert_run 0 'int main(void){int n=128;int a[n];a[0]=5;int i=0;mid:if(i==5000)return a[0]==5?0:1;int b[n];b[0]=i++;goto mid;}'
+
+# Nested outward jumps unwind only exited VLA declarations. The outer array
+# remains live after leaving the inner allocation scope.
+assert_run 0 'int main(void){int n=64;int i=0;loop:{int a[n];a[0]=7;{int b[n];b[0]=i++;goto out;}out:if(a[0]!=7)return 1;}if(i<4000)goto loop;return 0;}'
+
+# VM identifiers that do not themselves allocate dynamic data still participate
+# in the C goto constraint. Backward/outward transfers are legal; entering their
+# scope without executing the declaration is not. Ordinary declarations do not
+# create this barrier.
+assert_run 0 'int main(void){goto ordinary;int x=3;ordinary:return 0;}'
+assert_run 0 'int main(void){int n=3;int i=0;again:if(i++==3)return 0;typedef int A[n];goto again;}'
+assert_reject 'int main(void){int n=3;goto in;int a[n];in:return 0;}'
+assert_reject 'int main(void){int n=3;goto in;{int a[n];in:return 0;}}'
+assert_reject 'int main(void){int n=3;goto in;int (*p)[n]=0;in:return 0;}'
+assert_reject 'int main(void){int n=3;goto in;typedef int A[n];in:return 0;}'
+
+# Invalid/unsupported VM shapes are diagnosed rather than miscompiled.
+assert_reject 'int main(void){int n=3;int a[n]={1,2,3};return a[0];}'
+assert_reject 'int main(void){int n=3;static int a[n];return 0;}'
+assert_reject 'int main(void){int n=3;extern int a[n];return 0;}'
+assert_reject 'int n;int a[n];int main(void){return 0;}'
+assert_reject 'int main(void){int n=3;struct S{int a[n];};return 0;}'
+assert_reject 'int n=3;typedef int A[n];int main(void){return 0;}'
+assert_reject 'int f(int n,int a[static *]);int main(void){return 0;}'
+
+# Existing constant-bound constraints remain strict.
+assert_reject 'int main(void){int a[0];return 0;}'
+assert_reject 'int main(void){int a[-1];return 0;}'
+assert_reject 'int main(void){double n=3;int a[n];return 0;}'
+
+rm -f tmp-vla.c tmp-vla.s tmp-vla tmp-vla-bad.c tmp-vla.err
+
+echo 'All C99 VLA tests passed!'
