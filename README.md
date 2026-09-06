@@ -10,7 +10,7 @@ This repository is intentionally assembled with **history-preserving migration**
 | --- | --- | --- |
 | [Nova](projects/Nova) | Typed language, semantic analysis, interpreter/runtime | **IMPORTED / VERIFIED** |
 | [tiny-c-compiler](https://github.com/Lei-TzuY/tiny-c-compiler) | Self-contained x86-64 C compiler | ATTRIBUTION REVIEW |
-| [sic-xe-assembler](https://github.com/Lei-TzuY/sic-xe-assembler) | SIC/XE assembler and static-analysis tooling | HOLD — recheck active implementation state |
+| [sic-xe-assembler](projects/sic-xe-assembler) | SIC/XE assembler and static-analysis tooling | **IMPORTED / VERIFIED** |
 | [mini-elf-toolchain](projects/mini-elf-toolchain) | ELF/static-linking toolchain | **IMPORTED / VERIFIED** |
 | [mini-language-server](projects/mini-language-server) | Version-safe semantic/LSP tooling | **IMPORTED / VERIFIED** |
 | [mini-debugger](projects/mini-debugger) | ptrace-based debugger | **IMPORTED / VERIFIED** |
@@ -36,8 +36,7 @@ compiler-runtime-lab/
     ├── mini-wasm-runtime/       # imported + verified
     ├── Nova/                    # imported + verified
     ├── mini-language-server/    # imported + verified
-    ├── tiny-c-compiler/         # attribution review
-    └── sic-xe-assembler/        # hold / recheck
+    └── sic-xe-assembler/        # imported + verified
 ```
 
 A project directory is created only by a verified history-preserving import. ZIP/download-and-copy commits are not used as a substitute for history.
@@ -57,6 +56,8 @@ A project directory is created only by a verified history-preserving import. ZIP
 `Nova` was imported from source SHA `dcadc2238737b6f1e98887ab8fa658b23413d31b`. Full reachable history, blob equivalence, stable rustfmt/Clippy/tests/build/rustdoc and Rust 1.85 MSRV all passed; exact merged umbrella main later passed all five permanent Nova jobs. The source has no top-level LICENSE, which is preserved as-is.
 
 `mini-language-server` was initially imported at source SHA `f8a4d642eaa721741ab3cea7eb02d2f261dbad01` and then non-squashed-refreshed through `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8`. The refreshed source remains reachable umbrella ancestry and matches source tree content exactly. Source PR/main CI and umbrella PR/main CI all pass Ubuntu/Windows/macOS × Python 3.11/3.13, and exact merged umbrella main also passes the bounded Nova ↔ LSP shared-source contract. The source contains no top-level LICENSE; that state is preserved.
+
+`sic-xe-assembler` was imported from frozen source SHA `a58f4b5c7f34675fddf437d4af596cd81b5d891f` after stale PR #30 was closed unmerged as superseded by the newer mainline analysis architecture. The history-preserving subtree commit keeps that exact source commit as its second parent and matches source tree `dbd346644c74ff713294d263ad69bfc7e0309e8b` exactly. Source freeze audit, ancestry/tree proof, Ubuntu/Windows × Python 3.10/3.13 unit gates, and Linux golden fixtures all pass on exact merged umbrella main.
 
 ## Verified integration chains
 
