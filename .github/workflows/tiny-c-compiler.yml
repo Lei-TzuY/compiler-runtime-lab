@@ -1,0 +1,111 @@
+name: Tiny-C Compiler migration
+
+on:
+  push:
+    paths:
+      - 'projects/tiny-c-compiler/**'
+      - '.github/workflows/tiny-c-compiler.yml'
+  pull_request:
+    paths:
+      - 'projects/tiny-c-compiler/**'
+      - '.github/workflows/tiny-c-compiler.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: 5607c3152d319353c42f05ed44ff53479272a74f
+  SOURCE_TREE: a1a5b63e0abf0a9144af15fad09e290742d444d0
+  PROJECT_DIR: projects/tiny-c-compiler
+
+jobs:
+  verify-history-provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect imported subtree
+        id: detect
+        shell: bash
+        run: |
+          if [ -d "$PROJECT_DIR" ]; then echo 'present=true' >> "$GITHUB_OUTPUT"; else echo 'present=false' >> "$GITHUB_OUTPUT"; fi
+      - name: Verify preserved ancestry, tree identity and legacy provenance exception
+        if: steps.detect.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          test "$(git rev-parse "$SOURCE_SHA^{tree}")" = "$SOURCE_TREE"
+          test "$(git rev-parse "HEAD:$PROJECT_DIR")" = "$SOURCE_TREE"
+          python3 - <<'PY'
+          import re, subprocess
+          source = '5607c3152d319353c42f05ed44ff53479272a74f'
+          raw = subprocess.check_output(['git','log',source,'--format=%H%x00%B%x00']).decode('utf-8', errors='replace')
+          parts = raw.split('\x00')
+          records=[]
+          for i in range(0, len(parts)-1, 2):
+              sha=parts[i].strip(); body=parts[i+1]
+              if sha: records.append((sha,body))
+          marker=re.compile(r'(?im)^\s*(co-authored-by|generated-by|assisted-by|signed-off-by)\s*:\s*(.+?)\s*$')
+          allowed=re.compile(r'^github-actions\[bot\]\s*<41898282\+github-actions\[bot\]@users\.noreply\.github\.com>$', re.I)
+          ai=re.compile(r'(?i)\b(anthropic|claude|openai)\b')
+          allowed_count=0; forbidden=[]; ai_hits=[]
+          for sha,body in records:
+              for m in marker.finditer(body):
+                  kind=m.group(1).lower(); value=m.group(2).strip()
+                  if kind == 'co-authored-by' and allowed.fullmatch(value): allowed_count += 1
+                  else: forbidden.append((sha,kind,value))
+              if ai.search(body): ai_hits.append(sha)
+          assert len(records) == 272, len(records)
+          assert allowed_count == 24, allowed_count
+          assert not forbidden, forbidden
+          assert not ai_hits, ai_hits
+          print('canonical provenance policy: 272 commits; 24 legacy github-actions[bot] co-author trailers; zero forbidden/AI markers')
+          PY
+
+  test:
+    name: Full suite (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect imported subtree
+        id: detect
+        shell: bash
+        run: |
+          if [ -d "$PROJECT_DIR" ]; then echo 'present=true' >> "$GITHUB_OUTPUT"; else echo 'present=false' >> "$GITHUB_OUTPUT"; fi
+      - name: Show host compiler
+        if: steps.detect.outputs.present == 'true'
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: "$CC --version"
+      - name: Full test suite
+        if: steps.detect.outputs.present == 'true'
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: make test
+
+  sanitizer-audit:
+    name: ASan + UBSan audit
+    runs-on: ubuntu-latest
+    env:
+      CC: gcc
+      CFLAGS: -std=c11 -g -O1 -fno-common -fno-omit-frame-pointer -fsanitize=address,undefined
+      LDFLAGS: -fsanitize=address,undefined
+      ASAN_OPTIONS: detect_leaks=0
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect imported subtree
+        id: detect
+        shell: bash
+        run: |
+          if [ -d "$PROJECT_DIR" ]; then echo 'present=true' >> "$GITHUB_OUTPUT"; else echo 'present=false' >> "$GITHUB_OUTPUT"; fi
+      - name: Build and run full suite under sanitizers
+        if: steps.detect.outputs.present == 'true'
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: make test
