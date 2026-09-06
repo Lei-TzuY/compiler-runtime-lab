@@ -14,12 +14,12 @@ This document is the durable migration ledger for `compiler-runtime-lab`.
 | Project | Frozen / observed source `main` | Evidence | Status |
 | --- | --- | --- | --- |
 | Nova | `dcadc2238737b6f1e98887ab8fa658b23413d31b` | source CI `33920772855`; one-shot `33967555408`; PR 5/5; merged `7be12c6d...`; post-merge `33968264098` 5/5 | **IMPORTED / VERIFIED** |
-| tiny-c-compiler | `5607c3152d319353c42f05ed44ff53479272a74f` | source CI `33611130023`; provenance/hygiene audit `34045875911`; bootstrap `34046028206`; PR `34046094212`; merged `336a8244...`; post-merge `34046180568` | **IMPORTED / VERIFIED** |
+| tiny-c-compiler | `5607c3152d319353c42f05ed44ff53479272a74f` | source CI `33611130023`; provenance/hygiene audit `34045875911`; bootstrap `34046028206`; PR `34046094212`; merged `336a8244...`; post-merge `34046180568`; imported-chain PR #14 run `34057835648` | **IMPORTED / VERIFIED** |
 | sic-xe-assembler | `a58f4b5c7f34675fddf437d4af596cd81b5d891f` | source CI `33555216616`; freeze audit `34044551045`; bootstrap `34044841065`; PR `34044965048`; merged `3633e53d...`; post-merge `34045041777` | **IMPORTED / VERIFIED** |
 | mini-elf-toolchain | `3d452a8681bbfb092cd41465dba6f6eb97dfd224` | complete history/tree/native Rust verification | **IMPORTED / VERIFIED** |
 | mini-language-server | `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8` | source PR/main six-way CI; refresh `33970141357`; umbrella PR/main six-way CI; Nova/LSP shared contract on PR and merged main | **IMPORTED / VERIFIED** |
 | mini-debugger | `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` | source CI `33928883989`; one-shot `33928967178`; post-merge integration green | **IMPORTED / VERIFIED** |
-| mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | one-shot `33927869512`; permanent umbrella CI `33927981587` | **IMPORTED / VERIFIED** |
+| mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | one-shot `33927869512`; permanent umbrella CI `33927981587`; imported-chain PR #14 run `34057835648` | **IMPORTED / VERIFIED** |
 | mini-wasm-runtime | `e923b27a2652aba88d50cdbb75d0fe959d40e457` | one-shot `33966895454`; post-merge seven-job CI `33967377142` | **IMPORTED / VERIFIED** |
 | tiny-tensor-compiler | `4690df5747a1e7fc0af9b602f8be8d963e72d00f` | refresh one-shot `33966522648`; post-merge four-way CI `33966708522` | **IMPORTED / VERIFIED** |
 
@@ -75,14 +75,20 @@ For every migration candidate:
 - First verified umbrella main: `baa897d1f5c972b8a1854b0202de67d7c4cd2597`
 - Complete reachable-history attribution, non-squashed ancestry, blob equivalence, rustfmt, Clippy `-D warnings` and tests: PASS.
 
-### mini-libc — VERIFIED 2026-09-05
+### mini-libc — VERIFIED / IMPORTED-TINY-C INTEGRATED 2026-09-07
 
 - Source SHA: `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`
 - Source CI: `33842616621`
 - One-shot run: `33927869512`
 - First verified umbrella main: `26cd23866580026bc9d72644da3fda9e25d18828`
 - Permanent umbrella CI: `33927981587`
-- GCC/Clang runtime probes, host-libc independence, pinned tiny-C bootstrap and source-style mini-ELF bootstrap: PASS.
+- Original import checkpoint: GCC/Clang runtime probes, host-libc independence, pinned Tiny-C bootstrap and source-style mini-ELF bootstrap PASS.
+- Imported-chain PR: #14.
+- PR-head integration run: `34057835648`, four jobs PASS.
+- The permanent mini-libc workflow now builds `projects/tiny-c-compiler/minicc` directly from the umbrella checkout rather than cloning the external source repository.
+- Imported Tiny-C → mini-libc compile/archive/executable probe: PASS.
+- Imported Tiny-C → mini-libc → imported mini-ELF compile/archive/link/run/host-libc-independence probe: PASS.
+- The mini-libc workflow now watches `projects/tiny-c-compiler/**`, `projects/mini-libc/**`, and `projects/mini-elf-toolchain/**`, so changes on any side re-run the executable contract.
 - Source has no top-level LICENSE; that absence is preserved.
 
 ### mini-debugger — VERIFIED 2026-09-05
@@ -171,7 +177,7 @@ Both imported projects now consume the same fixtures under `integration/nova-lsp
 
 This is a real executable cross-project contract, but it remains deliberately bounded. It does not claim complete Nova grammar/type-system/LSP parity.
 
-### tiny-c-compiler — VERIFIED 2026-09-07
+### tiny-c-compiler — VERIFIED / IMPORTED-CHAIN INTEGRATED 2026-09-07
 
 - Source SHA: `5607c3152d319353c42f05ed44ff53479272a74f`.
 - Source tree: `a1a5b63e0abf0a9144af15fad09e290742d444d0`.
@@ -185,7 +191,9 @@ This is a real executable cross-project contract, but it remains deliberately bo
 - Import PR #12 gate: `34046094212`, provenance + GCC + Clang + ASan/UBSan PASS.
 - Merged umbrella SHA: `336a8244c291910fc5cb2aadec91a3a7260ece16`.
 - Exact merged-main gate: `34046180568`, provenance + GCC + Clang + ASan/UBSan PASS.
-- Existing Tiny-C → mini-libc integration evidence remains a pinned compiler contract; this import does not silently claim that workflow has been rewired to the subtree.
+- Imported-chain PR #14 replaces the previous external frozen clone with `projects/tiny-c-compiler/minicc` in permanent mini-libc CI.
+- PR #14 head run `34057835648`: runtime GCC, runtime Clang, imported Tiny-C → mini-libc bootstrap, and imported Tiny-C → mini-libc → imported mini-ELF bootstrap all PASS.
+- The executable proof includes compile, archive, static link, execution and host-libc-independence inspection; it remains bounded to that tested x86-64 freestanding contract.
 
 ### sic-xe-assembler — VERIFIED 2026-09-07
 
@@ -234,6 +242,18 @@ The originally planned compiler/runtime migration set is now complete:
 - no new integration claim was invented merely because the final subtree now exists.
 
 The earlier seven-project and eight-project checkpoints remain valid historical milestones rather than being rewritten retroactively.
+
+## Imported Tiny-C executable integration — VERIFIED ON PR HEAD 2026-09-07
+
+PR #14 advances the post-migration architecture without rewriting the nine-project checkpoint:
+
+- permanent mini-libc CI no longer clones the external frozen Tiny-C repository;
+- the compiler executable is built from `projects/tiny-c-compiler` in the same umbrella checkout;
+- the imported compiler builds mini-libc and a freestanding integration program;
+- the same imported compiler/mini-libc artifacts are linked by `projects/mini-elf-toolchain`;
+- the resulting executable runs successfully and passes host-libc-independence inspection;
+- PR-head run `34057835648` passed all four mini-libc jobs;
+- this establishes a real three-subtree executable edge rather than inferring integration from co-location.
 
 ## Source repository retirement policy
 
