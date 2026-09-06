@@ -46,7 +46,7 @@ A project directory is created only by a verified history-preserving import. ZIP
 
 `mini-elf-toolchain` is the reference migration. Source SHA `3d452a8681bbfb092cd41465dba6f6eb97dfd224` was imported without squashing into `projects/mini-elf-toolchain/`; source ancestry, tree equivalence and native Rust gates were verified and permanent path-scoped CI protects future changes.
 
-`mini-libc` was imported from source SHA `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`. GCC/Clang runtime probes, host-libc-independence checks, pinned tiny-C bootstrap and source-style mini-ELF bootstrap all passed. Its source has no top-level LICENSE, and the umbrella preserves that state rather than inventing one.
+`mini-libc` was imported from source SHA `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1`. GCC/Clang runtime probes and host-libc-independence checks passed at import time. PR #14 later rewired the compiler bootstrap to consume `projects/tiny-c-compiler` directly and re-proved both the Tiny-C → mini-libc executable path and the Tiny-C → mini-libc → imported mini-ELF path on PR-head run `34057835648`. Its source has no top-level LICENSE, and the umbrella preserves that state rather than inventing one.
 
 `mini-debugger` was imported from source SHA `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` after exact source CI, full reachable-history attribution scanning, native CMake/CTest, ancestry and blob-for-blob verification passed.
 
@@ -60,12 +60,12 @@ A project directory is created only by a verified history-preserving import. ZIP
 
 `sic-xe-assembler` was imported from frozen source SHA `a58f4b5c7f34675fddf437d4af596cd81b5d891f` after stale PR #30 was closed unmerged as superseded by the newer mainline analysis architecture. The history-preserving subtree commit keeps that exact source commit as its second parent and matches source tree `dbd346644c74ff713294d263ad69bfc7e0309e8b` exactly. Source freeze audit, ancestry/tree proof, Ubuntu/Windows × Python 3.10/3.13 unit gates, and Linux golden fixtures all pass on exact merged umbrella main.
 
-`tiny-c-compiler` was imported from frozen source SHA `5607c3152d319353c42f05ed44ff53479272a74f` with source history preserved exactly. A complete 272-commit reachable-history audit found exactly 24 historical `github-actions[bot]` co-author trailers and zero other attribution/AI markers; those CI-bot trailers are retained as an explicit legacy provenance exception rather than rewritten. Source GCC/Clang full suites and ASan+UBSan passed, the subtree preserves exact tree `a1a5b63e0abf0a9144af15fad09e290742d444d0`, and the same provenance/GCC/Clang/sanitizer gates pass on exact merged umbrella main. The existing mini-libc bootstrap chain remains a pinned Tiny-C contract unless separately rewired and re-proven against this subtree.
+`tiny-c-compiler` was imported from frozen source SHA `5607c3152d319353c42f05ed44ff53479272a74f` with source history preserved exactly. A complete 272-commit reachable-history audit found exactly 24 historical `github-actions[bot]` co-author trailers and zero other attribution/AI markers; those CI-bot trailers are retained as an explicit legacy provenance exception rather than rewritten. Source GCC/Clang full suites and ASan+UBSan passed, the subtree preserves exact tree `a1a5b63e0abf0a9144af15fad09e290742d444d0`, and the same provenance/GCC/Clang/sanitizer gates pass on exact merged umbrella main. PR #14 then replaced the old external pinned clone in mini-libc CI with this imported subtree; PR-head run `34057835648` passed the imported Tiny-C → mini-libc executable probe and the imported Tiny-C → mini-libc → mini-ELF executable/link/run/host-libc-independence probe.
 
 ## Verified integration chains
 
 ```text
-pinned tiny-c-compiler
+projects/tiny-c-compiler
         ↓
 projects/mini-libc
         ↓
