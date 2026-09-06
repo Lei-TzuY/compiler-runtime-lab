@@ -19,9 +19,9 @@ This document is the durable migration ledger for `compiler-runtime-lab`.
 | mini-elf-toolchain | `3d452a8681bbfb092cd41465dba6f6eb97dfd224` | complete history/tree/native Rust verification | **IMPORTED / VERIFIED** |
 | mini-language-server | `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8` | source PR/main six-way CI; refresh `33970141357`; umbrella PR/main six-way CI; Nova/LSP shared contract on PR and merged main | **IMPORTED / VERIFIED** |
 | mini-debugger | `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` | source CI `33928883989`; one-shot `33928967178`; post-merge integration green | **IMPORTED / VERIFIED** |
-| mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | one-shot `33927869512`; permanent umbrella CI `33927981587`; imported-chain PR #14 run `34057835648` | **IMPORTED / VERIFIED** |
+| mini-libc | `a9d2a1d9fb1ead44d45d679da5a8586d6f8007a1` | one-shot `33927869512`; permanent umbrella CI `33927981587`; imported-chain PR #14 run `34057835648`; tensor executable PR #15 | **IMPORTED / VERIFIED** |
 | mini-wasm-runtime | `e923b27a2652aba88d50cdbb75d0fe959d40e457` | one-shot `33966895454`; post-merge seven-job CI `33967377142` | **IMPORTED / VERIFIED** |
-| tiny-tensor-compiler | `4690df5747a1e7fc0af9b602f8be8d963e72d00f` | refresh one-shot `33966522648`; post-merge four-way CI `33966708522` | **IMPORTED / VERIFIED** |
+| tiny-tensor-compiler | `4690df5747a1e7fc0af9b602f8be8d963e72d00f` | refresh one-shot `33966522648`; post-merge four-way CI `33966708522`; tensor ELF PR #15 `34063095036`; merged-main `34063270273` | **IMPORTED / VERIFIED** |
 
 ### Attribution-scan rule
 
@@ -89,6 +89,7 @@ For every migration candidate:
 - Imported Tiny-C → mini-libc compile/archive/executable probe: PASS.
 - Imported Tiny-C → mini-libc → imported mini-ELF compile/archive/link/run/host-libc-independence probe: PASS.
 - The mini-libc workflow now watches `projects/tiny-c-compiler/**`, `projects/mini-libc/**`, and `projects/mini-elf-toolchain/**`, so changes on any side re-run the executable contract.
+- PR #15 additionally reuses imported mini-libc startup/runtime artifacts in the bounded tensor-object → mini-ELF executable proof.
 - Source has no top-level LICENSE; that absence is preserved.
 
 ### mini-debugger — VERIFIED 2026-09-05
@@ -102,7 +103,7 @@ For every migration candidate:
 
 The chain is intentionally bounded to sectionless ET_EXEC launch, memory read and numeric breakpoint behavior; `.symtab` interoperability is not claimed.
 
-### tiny-tensor-compiler — VERIFIED / REFRESHED 2026-09-05
+### tiny-tensor-compiler — VERIFIED / REFRESHED / ELF OBJECT INTEGRATED 2026-09-07
 
 - Initial source SHA: `66ff2c6d02a22c621d01579b442af8b6fd43bcc5`
 - Refreshed source SHA: `4690df5747a1e7fc0af9b602f8be8d963e72d00f`
@@ -111,9 +112,13 @@ The chain is intentionally bounded to sectionless ET_EXEC launch, memory read an
 - Merged umbrella SHA: `ae03589a39a36d2df8e8220d933471722708cedc`
 - Post-merge Ubuntu/Windows × Python 3.11/3.13: `33966708522`, PASS.
 - The 26 newly reachable commits were separately attribution-scanned before the non-squashed refresh.
+- Tensor executable integration PR #15 final head: `b958141f375aca929c0b919284d041660ed8fdbf`.
+- PR-head Tensor ELF run: `34063095036`, PASS.
+- Normal merge: `b7b8953712b6a496e33c7e30e9d44669a6c95b62`.
+- Exact merged-main Tensor ELF run: `34063270273`, PASS.
 - Source has no top-level LICENSE; that state is preserved.
 
-No direct mini-ELF integration is claimed because the current backend produces host-toolchain shared libraries rather than mini-ELF's static ET_EXEC input contract.
+The source native backend still produces host-toolchain shared libraries. The umbrella's new static edge is a separate, bounded contract: generate a deterministic int32 C ABI artifact from the imported compiler, compile that generated C with the host freestanding C compiler into a relocatable x86-64 object with no unresolved symbols, compile the harness and mini-libc with imported Tiny-C, link through imported mini-ELF, execute the resulting ELF64 ET_EXEC, and verify host-libc independence. It does **not** claim that imported Tiny-C compiles the generated tensor C or that all tensor backends are mini-ELF compatible.
 
 ### mini-wasm-runtime — VERIFIED 2026-09-05
 
@@ -243,7 +248,7 @@ The originally planned compiler/runtime migration set is now complete:
 
 The earlier seven-project and eight-project checkpoints remain valid historical milestones rather than being rewritten retroactively.
 
-## Imported Tiny-C executable integration — VERIFIED ON PR HEAD 2026-09-07
+## Imported Tiny-C executable integration — VERIFIED 2026-09-07
 
 PR #14 advances the post-migration architecture without rewriting the nine-project checkpoint:
 
@@ -254,6 +259,23 @@ PR #14 advances the post-migration architecture without rewriting the nine-proje
 - the resulting executable runs successfully and passes host-libc-independence inspection;
 - PR-head run `34057835648` passed all four mini-libc jobs;
 - this establishes a real three-subtree executable edge rather than inferring integration from co-location.
+
+## Tensor object → mini-ELF executable integration — VERIFIED 2026-09-07
+
+PR #15 closes the previously explicit tensor/object/executable gap without changing any imported project subtree:
+
+- `projects/tiny-tensor-compiler` generates a deterministic int32 elementwise-add C ABI containing `tiny_tensor_run`;
+- the generated C is compiled by the host freestanding C compiler to a relocatable x86-64 `tensor.o`, and the integration requires zero unresolved symbols;
+- imported `projects/tiny-c-compiler/minicc` compiles the freestanding harness and imported mini-libc sources; it is **not** claimed to compile the generated tensor C;
+- imported mini-libc provides `crt0`, syscall/runtime objects and the static archive;
+- imported `projects/mini-elf-toolchain` links the tensor object, harness, `crt0` and mini-libc archive into ELF64 `ET_EXEC`;
+- execution requires the exact tensor outputs and `tensor-elf-ok`, followed by host-libc-independence inspection;
+- the first PR-head run exposed a real freestanding header mismatch (`stdint.h` unavailable through mini-libc); the harness was minimally corrected to use the x86-64 ABI 32-bit `int` surface instead of widening mini-libc;
+- final PR #15 head `b958141f375aca929c0b919284d041660ed8fdbf` passed Tensor ELF run `34063095036`;
+- PR #15 normal-merged as `b7b8953712b6a496e33c7e30e9d44669a6c95b62`;
+- exact merged-main Tensor ELF run `34063270273` passed again.
+
+The edge is intentionally narrow. It does not claim arbitrary tensor graphs/backends, SIMD/OpenMP/dynamic-shape/native-bundle compatibility, or generated-tensor-C compilation by Tiny-C.
 
 ## Source repository retirement policy
 
