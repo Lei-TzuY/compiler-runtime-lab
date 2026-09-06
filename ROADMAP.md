@@ -33,12 +33,12 @@
 
 The original first-seven flagship checkpoint and the later SIC/XE eight-project checkpoint remain historical milestones. `tiny-c-compiler` has now resolved the final migration exception through an explicit preserve-not-rewrite provenance policy.
 
-All nine planned projects now preserve source history and verified source trees in the umbrella. Existing executable integration claims remain bounded to the evidence actually exercised by their workflows; importing Tiny-C does not by itself rewire the previously pinned Tiny-C → mini-libc chain.
+All nine planned projects now preserve source history and verified source trees in the umbrella. Import completion and executable integration are tracked separately; PR #14 subsequently rewires the previously pinned Tiny-C → mini-libc contract to consume the imported Tiny-C subtree directly.
 
 ## Phase 3 — Umbrella integration
 
 - [x] add path-scoped CI for imported projects without weakening project-local gates;
-- [x] establish `tiny-c-compiler` → `mini-libc` → `mini-elf-toolchain` → executable bootstrap validation;
+- [x] establish imported `tiny-c-compiler` → `mini-libc` → `mini-elf-toolchain` → executable bootstrap validation; PR #14 head run `34057835648` proves compile, archive, link, execute and host-libc independence from umbrella subtrees;
 - [x] establish `mini-elf-toolchain` → sectionless ET_EXEC → `mini-debugger` address-level debugging validation;
 - [x] preserve mini-wasm's external conformance boundary with Wasmtime differential, benchmark-policy and deterministic fuzz smoke;
 - [x] import Nova as an independently verifiable language/compiler/runtime subtree;
@@ -50,7 +50,7 @@ All nine planned projects now preserve source history and verified source trees 
 ### Current verified chains
 
 ```text
-pinned tiny-c-compiler
+projects/tiny-c-compiler
         ↓
 projects/mini-libc
         ↓
@@ -123,6 +123,15 @@ The planned compiler/runtime migration set is complete:
 - [x] import Tiny-C with exact source ancestry and tree identity;
 - [x] pass provenance, GCC, Clang and ASan+UBSan gates on the import PR and exact merged umbrella main;
 - [x] reach 9/9 history-preserved, independently verified planned imports without rewriting genuine source history.
+
+## Phase 4C — Imported Tiny-C integration
+
+- [x] remove the external frozen Tiny-C clone from permanent mini-libc integration CI;
+- [x] build `projects/tiny-c-compiler/minicc` directly from the umbrella checkout;
+- [x] feed the imported compiler into the mini-libc compile/archive/executable probe;
+- [x] feed the same imported compiler and imported mini-libc artifacts into `projects/mini-elf-toolchain`;
+- [x] execute the resulting freestanding x86-64 binary and verify host-libc independence on PR #14 head run `34057835648`;
+- [x] make changes under `projects/tiny-c-compiler/**` re-run the mini-libc cross-project contract.
 
 ## Phase 5 — Portfolio consolidation
 
