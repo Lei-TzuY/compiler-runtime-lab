@@ -34,9 +34,21 @@
       "source_repository": "Lei-TzuY/sic-xe-assembler",
       "target_path": "projects/sic-xe-assembler",
       "observed_main_sha": "a58f4b5c7f34675fddf437d4af596cd81b5d891f",
-      "status": "hold",
-      "blocker": "Open implementation PR #30 was observed during preflight; recheck before any import.",
-      "attribution_notes": "No Claude/Anthropic commit-message hits in first-pass GitHub search."
+      "status": "imported-verified",
+      "blocker": null,
+      "imported_source_sha": "a58f4b5c7f34675fddf437d4af596cd81b5d891f",
+      "subtree_commit": "7523f6ad2a7b5f44bd43499072d71701f36d62bb",
+      "verified_migration_branch_sha": "245dea23ae2572c010b15b8ce013c5e847c6b5e4",
+      "source_ci_run_id": 33555216616,
+      "source_freeze_audit_run_id": 34044551045,
+      "bootstrap_run_id": 34044841065,
+      "migration_pr_number": 9,
+      "migration_pr_ci_run_id": 34044965048,
+      "merged_umbrella_sha": "3633e53d47d7c7272899d934fe3e050617f61ef4",
+      "umbrella_post_merge_ci_run_id": 34045041777,
+      "repository_hygiene_notes": "Frozen source history and repository hygiene passed the dedicated source-freeze audit; no .gitmodules or obvious generated/cache payload was admitted by the migration review.",
+      "integration_notes": "Imported as an independently verifiable SIC/XE assembler and static-analysis toolchain. No artificial cross-project integration is claimed by this migration.",
+      "attribution_notes": "Stale source PR #30 was closed unmerged only after current main was shown to supersede its memory/register fixed-point capability set. Complete reachable-history attribution and hygiene audit passed on the frozen source. History-preserving subtree commit 7523f6ad... retains source a58f4b5c... as its second parent; source and imported subtree share tree dbd346644c74ff713294d263ad69bfc7e0309e8b. PR and exact merged-main Ubuntu/Windows \u00d7 Python 3.10/3.13 gates passed, including Linux golden fixtures."
     },
     {
       "name": "mini-elf-toolchain",
@@ -75,8 +87,8 @@
       "umbrella_post_merge_ci_run_id": 33970500383,
       "integration_post_merge_ci_run_id": 33970500375,
       "repository_hygiene_notes": "Source contains README, docs, pyproject, src and tests but no top-level LICENSE file; migration preserves that source state exactly.",
-      "integration_notes": "Verified bounded Nova ↔ mini-language-server shared-source contract. Source PR #41 added legal typed Nova parameter/return signatures while preserving legacy bounded signatures. The umbrella non-squashed refresh preserves source commit ab22b04e... as ancestry. Shared valid.nv is accepted by imported Nova and publishes function/parameter/local symbols with no mini-language-server diagnostics; shared unresolved.nv is rejected by Nova as N3003 and published by mini-language-server as nova.unresolved-name. This does not claim complete Nova grammar, type-system, or production-LSP coverage.",
-      "attribution_notes": "Initial complete reachable source-main history scan passed before import. Newly reachable history from f8a4d642... through ab22b04e... was separately scanned before the non-squashed refresh; the refreshed source remains umbrella ancestry and matched blob-for-blob. Source PR/main and umbrella PR/main Ubuntu/Windows/macOS × Python 3.11/3.13 matrices all passed, and the shared Nova/LSP contract passed on exact merged umbrella main."
+      "integration_notes": "Verified bounded Nova \u2194 mini-language-server shared-source contract. Source PR #41 added legal typed Nova parameter/return signatures while preserving legacy bounded signatures. The umbrella non-squashed refresh preserves source commit ab22b04e... as ancestry. Shared valid.nv is accepted by imported Nova and publishes function/parameter/local symbols with no mini-language-server diagnostics; shared unresolved.nv is rejected by Nova as N3003 and published by mini-language-server as nova.unresolved-name. This does not claim complete Nova grammar, type-system, or production-LSP coverage.",
+      "attribution_notes": "Initial complete reachable source-main history scan passed before import. Newly reachable history from f8a4d642... through ab22b04e... was separately scanned before the non-squashed refresh; the refreshed source remains umbrella ancestry and matched blob-for-blob. Source PR/main and umbrella PR/main Ubuntu/Windows/macOS \u00d7 Python 3.11/3.13 matrices all passed, and the shared Nova/LSP contract passed on exact merged umbrella main."
     },
     {
       "name": "mini-debugger",
@@ -141,7 +153,7 @@
       "umbrella_post_merge_ci_run_id": 33966708522,
       "repository_hygiene_notes": "Source has README, CHANGELOG, docs, pyproject and project metadata but no top-level LICENSE file; migration preserves that source state rather than inventing licensing metadata.",
       "integration_notes": "The native backend emits and loads shared libraries through the host C toolchain, while mini-elf-toolchain is a static ET_EXEC linker. No fake direct integration is claimed; a future edge requires a deliberate object/static-runtime or executable-artifact handoff.",
-      "attribution_notes": "Initial complete reachable-history scan passed. Refresh from 66ff2c6d... through 4690df57... separately scanned all newly reachable commits for configured attribution patterns, preserved the new source head as umbrella ancestry, matched the refreshed subtree blob-for-blob, passed ruff/pytest from the umbrella path, and the merged umbrella main passed the full Ubuntu/Windows × Python 3.11/3.13 matrix."
+      "attribution_notes": "Initial complete reachable-history scan passed. Refresh from 66ff2c6d... through 4690df57... separately scanned all newly reachable commits for configured attribution patterns, preserved the new source head as umbrella ancestry, matched the refreshed subtree blob-for-blob, passed ruff/pytest from the umbrella path, and the merged umbrella main passed the full Ubuntu/Windows \u00d7 Python 3.11/3.13 matrix."
     }
   ]
 }

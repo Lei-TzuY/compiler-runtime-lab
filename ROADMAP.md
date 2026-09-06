@@ -11,7 +11,7 @@
 
 - [x] Nova — frozen at `dcadc2238737b6f1e98887ab8fa658b23413d31b`; exact source/open-PR/CI, complete reachable-history attribution, tree equivalence, stable gates and Rust 1.85 MSRV passed.
 - [ ] tiny-c-compiler — resolve/accept bot co-author history policy before import.
-- [ ] sic-xe-assembler — recheck and resolve any active implementation PR before migration.
+- [x] sic-xe-assembler — frozen at `a58f4b5c7f34675fddf437d4af596cd81b5d891f`; stale PR #30 closed unmerged after supersession audit, source freeze audit passed, and exact imported-main verification is green.
 - [x] mini-elf-toolchain — frozen at `3d452a8681bbfb092cd41465dba6f6eb97dfd224`.
 - [x] mini-language-server — initially imported at `f8a4d642eaa721741ab3cea7eb02d2f261dbad01` and non-squashed-refreshed through `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8`; source PR/main six-way CI, refresh ancestry/tree equivalence, umbrella six-way CI, and shared Nova/LSP integration all passed.
 - [x] mini-debugger — frozen at `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a`.
@@ -29,11 +29,11 @@
 6. [x] `Nova` — **IMPORTED / VERIFIED**
 7. [x] `mini-language-server` — **IMPORTED / VERIFIED**; source refresh and exact merged-main six-way + Nova/LSP integration proof complete
 8. [ ] `tiny-c-compiler` after attribution policy is resolved
-9. [ ] `sic-xe-assembler` after its active-PR state is rechecked and any blocker is resolved
+9. [x] `sic-xe-assembler` — **IMPORTED / VERIFIED**; preserved source ancestry/tree identity and exact merged-main four-way Python verification complete
 
-The first seven entries define the compiler/runtime flagship checkpoint. `tiny-c-compiler` and `sic-xe-assembler` remain explicit exceptions rather than blocking the checkpoint indefinitely.
+The original first-seven flagship checkpoint remains a historical milestone. `sic-xe-assembler` has now advanced beyond that checkpoint as the eighth history-preserved, verified import; `tiny-c-compiler` is the sole remaining migration exception pending explicit attribution policy.
 
-Seven projects now preserve source history and verified source trees in the umbrella. The seven-project migration checkpoint is final; mini-language-server additionally has a verified shared-source semantic contract with Nova.
+Eight projects now preserve source history and verified source trees in the umbrella. The Nova ↔ mini-language-server shared-source semantic contract remains the verified compiler/language-tooling integration edge.
 
 ## Phase 3 — Umbrella integration
 
@@ -102,6 +102,16 @@ The seven-project checkpoint is complete:
 - [x] record and execute the bounded Nova ↔ mini-language-server semantic/diagnostic contract;
 - [x] keep `tiny-c-compiler` and `sic-xe-assembler` as explicit pending exceptions rather than blocking the flagship checkpoint;
 - [x] hand off the next consolidation phase to `systems-lab` instead of extending compiler migration indefinitely.
+
+## Phase 4A — Eight-project checkpoint
+
+The post-flagship SIC/XE checkpoint is complete:
+
+- [x] close stale SIC/XE PR #30 without merging superseded duplicate architecture;
+- [x] freeze `sic-xe-assembler@a58f4b5c7f34675fddf437d4af596cd81b5d891f` with exact source CI and full reachable-history/hygiene audit;
+- [x] import SIC/XE with preserved ancestry and exact tree identity;
+- [x] verify Ubuntu/Windows × Python 3.10/3.13 plus Linux golden fixtures on PR head and exact merged umbrella main;
+- [x] leave `tiny-c-compiler` as the sole explicit pending attribution-policy exception.
 
 ## Phase 5 — Portfolio consolidation
 

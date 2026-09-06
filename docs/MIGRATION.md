@@ -9,13 +9,13 @@ This document is the durable migration ledger for `compiler-runtime-lab`.
 - **HOLD** — do not import while the stated blocker is active.
 - **IMPORTED / VERIFIED** — a history-preserving import whose selected source tree and umbrella tree have been verified and whose applicable tests pass from the umbrella layout.
 
-## Current preflight / migration state — 2026-09-05 (Asia/Taipei)
+## Current preflight / migration state — 2026-09-07 (Asia/Taipei)
 
 | Project | Frozen / observed source `main` | Evidence | Status |
 | --- | --- | --- | --- |
 | Nova | `dcadc2238737b6f1e98887ab8fa658b23413d31b` | source CI `33920772855`; one-shot `33967555408`; PR 5/5; merged `7be12c6d...`; post-merge `33968264098` 5/5 | **IMPORTED / VERIFIED** |
 | tiny-c-compiler | `5607c3152d319353c42f05ed44ff53479272a74f` | reachable history includes `Co-authored-by: github-actions[bot]` | ATTRIBUTION REVIEW |
-| sic-xe-assembler | `a58f4b5c7f34675fddf437d4af596cd81b5d891f` | #30 observed during first pass; recheck before import | **HOLD / RECHECK** |
+| sic-xe-assembler | `a58f4b5c7f34675fddf437d4af596cd81b5d891f` | source CI `33555216616`; freeze audit `34044551045`; bootstrap `34044841065`; PR `34044965048`; merged `3633e53d...`; post-merge `34045041777` | **IMPORTED / VERIFIED** |
 | mini-elf-toolchain | `3d452a8681bbfb092cd41465dba6f6eb97dfd224` | complete history/tree/native Rust verification | **IMPORTED / VERIFIED** |
 | mini-language-server | `ab22b04e596f0a9b45441c7b0a3a6ff0b79b20a8` | source PR/main six-way CI; refresh `33970141357`; umbrella PR/main six-way CI; Nova/LSP shared contract on PR and merged main | **IMPORTED / VERIFIED** |
 | mini-debugger | `0ed0d52d0d650e6e7b535bfe49804719cfae2c9a` | source CI `33928883989`; one-shot `33928967178`; post-merge integration green | **IMPORTED / VERIFIED** |
@@ -171,6 +171,20 @@ Both imported projects now consume the same fixtures under `integration/nova-lsp
 
 This is a real executable cross-project contract, but it remains deliberately bounded. It does not claim complete Nova grammar/type-system/LSP parity.
 
+### sic-xe-assembler — VERIFIED 2026-09-07
+
+- Source SHA: `a58f4b5c7f34675fddf437d4af596cd81b5d891f`.
+- Exact source-main CI: `33555216616`, Ubuntu/Windows × Python 3.10/3.13 PASS, with Linux golden fixtures.
+- Source freeze / full reachable-history and hygiene audit: `34044551045`, PASS.
+- Stale source PR #30: closed unmerged after its bounded cross-domain memory/register claims were shown to be superseded by current mainline memory-feedback, guarded, symbolic and callsite layers.
+- Bootstrap: `34044841065`, exact source/zero-open-PR recheck and history-preserving subtree import PASS.
+- Subtree commit: `7523f6ad2a7b5f44bd43499072d71701f36d62bb`; second parent is the exact frozen source SHA.
+- Source tree and imported subtree tree: `dbd346644c74ff713294d263ad69bfc7e0309e8b`, exact match.
+- Import PR #9 permanent gate: `34044965048`, history proof + four Python matrix jobs PASS.
+- Merged umbrella SHA: `3633e53d47d7c7272899d934fe3e050617f61ef4`.
+- Exact merged-main permanent gate: `34045041777`, history proof + Ubuntu/Windows × Python 3.10/3.13 PASS; Linux golden fixtures PASS.
+- No artificial cross-project integration is claimed by this import.
+
 ## Seven-project checkpoint — COMPLETE 2026-09-05
 
 The seven-project migration and architectural checkpoint is complete:
@@ -182,6 +196,16 @@ The seven-project migration and architectural checkpoint is complete:
 - `tiny-c-compiler` remains an explicit attribution-review exception;
 - `sic-xe-assembler` remains an explicit hold/recheck exception;
 - the next consolidation phase moves to `systems-lab` instead of stretching compiler migration indefinitely.
+
+## Eight-project checkpoint — COMPLETE 2026-09-07
+
+The SIC/XE follow-on checkpoint extends, rather than rewrites, the original seven-project milestone:
+
+- eight projects now preserve exact source history and verified source trees in the umbrella;
+- SIC/XE source, import PR and exact merged-main verification are green;
+- the stale SIC/XE implementation PR was closed unmerged instead of reintroducing superseded architecture;
+- `tiny-c-compiler` is now the sole remaining migration exception and stays under explicit attribution review;
+- no genuine authorship metadata has been silently rewritten.
 
 ## Source repository retirement policy
 
