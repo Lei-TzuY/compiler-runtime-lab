@@ -1,0 +1,88 @@
+name: SIC/XE Assembler migration
+
+on:
+  push:
+    paths:
+      - 'projects/sic-xe-assembler/**'
+      - '.github/workflows/sic-xe-assembler.yml'
+  pull_request:
+    paths:
+      - 'projects/sic-xe-assembler/**'
+      - '.github/workflows/sic-xe-assembler.yml'
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: a58f4b5c7f34675fddf437d4af596cd81b5d891f
+  PROJECT_DIR: projects/sic-xe-assembler
+
+jobs:
+  verify-history:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect imported subtree
+        id: detect
+        shell: bash
+        run: |
+          if [ -d "$PROJECT_DIR" ]; then
+            echo 'imported=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'imported=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify preserved source ancestry and tree identity
+        if: steps.detect.outputs.imported == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "${SOURCE_SHA}^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          source_tree="$(git rev-parse "${SOURCE_SHA}^{tree}")"
+          subtree_tree="$(git rev-parse "HEAD:${PROJECT_DIR}")"
+          test "$source_tree" = "$subtree_tree"
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ['3.10', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect imported subtree
+        id: detect
+        shell: bash
+        run: |
+          if [ -d "$PROJECT_DIR" ]; then
+            echo 'imported=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'imported=false' >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.detect.outputs.imported == 'true'
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Compile check
+        if: steps.detect.outputs.imported == 'true'
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: python -m compileall -q .
+      - name: Unified CLI smoke
+        if: steps.detect.outputs.imported == 'true'
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          python sicxe.py --help
+          python sicxe.py inspect --help
+          python sicxe.py disasm --help
+          python sicxe.py cfg --help
+      - name: Unit tests
+        if: steps.detect.outputs.imported == 'true'
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: python -m unittest discover -s tests -v
+      - name: Verify byte-for-byte golden fixtures
+        if: steps.detect.outputs.imported == 'true' && runner.os == 'Linux'
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: python verify.py
