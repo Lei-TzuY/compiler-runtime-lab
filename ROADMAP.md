@@ -39,6 +39,7 @@ All nine planned projects now preserve source history and verified source trees 
 
 - [x] add path-scoped CI for imported projects without weakening project-local gates;
 - [x] establish imported `tiny-c-compiler` → `mini-libc` → `mini-elf-toolchain` → executable bootstrap validation; PR #14 head run `34057835648` proves compile, archive, link, execute and host-libc independence from umbrella subtrees;
+- [x] establish `tiny-tensor-compiler` → generated C ABI → relocatable object → imported mini-libc/startup → `mini-elf-toolchain` → ELF64 ET_EXEC validation; PR #15 head run `34063095036` and exact merged-main run `34063270273` prove the bounded object/executable handoff;
 - [x] establish `mini-elf-toolchain` → sectionless ET_EXEC → `mini-debugger` address-level debugging validation;
 - [x] preserve mini-wasm's external conformance boundary with Wasmtime differential, benchmark-policy and deterministic fuzz smoke;
 - [x] import Nova as an independently verifiable language/compiler/runtime subtree;
@@ -62,6 +63,23 @@ execution + host-libc-independence inspection
 ```
 
 ```text
+projects/tiny-tensor-compiler
+        ↓ generate int32 C ABI
+freestanding generated C
+        ↓ host C compiler -> relocatable object
+        ↓
+imported mini-libc startup/runtime + imported Tiny-C-built harness
+        ↓
+projects/mini-elf-toolchain
+        ↓
+ELF64 ET_EXEC
+        ↓
+exact tensor result + tensor-elf-ok + host-libc-independence
+```
+
+The tensor contract is deliberately bounded: generated tensor C is compiled to the relocatable object by the host freestanding C compiler, while imported Tiny-C compiles the harness and mini-libc. This closes the previously missing object/executable handoff without claiming that Tiny-C supports arbitrary generated tensor C, or that SIMD/OpenMP/dynamic-shape/native-bundle artifacts are integrated.
+
+```text
 projects/mini-elf-toolchain
         ↓
 sectionless ELF64 ET_EXEC (entry 0x400000)
@@ -82,8 +100,6 @@ projects/Nova        projects/mini-language-server
         ↓                 ↓
 nova check           semantic + diagnostic publication
 ```
-
-`tiny-tensor-compiler` still needs a deliberate object/static-runtime or executable-artifact contract before any direct mini-ELF edge is claimed.
 
 `mini-wasm-runtime` remains a runtime/conformance island whose verified boundary is the WebAssembly spec/reference ecosystem rather than an invented internal dependency.
 
@@ -132,6 +148,17 @@ The planned compiler/runtime migration set is complete:
 - [x] feed the same imported compiler and imported mini-libc artifacts into `projects/mini-elf-toolchain`;
 - [x] execute the resulting freestanding x86-64 binary and verify host-libc independence on PR #14 head run `34057835648`;
 - [x] make changes under `projects/tiny-c-compiler/**` re-run the mini-libc cross-project contract.
+
+## Phase 4D — Tensor object / ELF executable integration
+
+- [x] generate a deterministic int32 elementwise-add C ABI artifact from the imported `tiny-tensor-compiler`;
+- [x] compile the generated C to a freestanding relocatable x86-64 object and require zero unresolved symbols;
+- [x] compile the integration harness and mini-libc through imported Tiny-C without widening mini-libc's header surface;
+- [x] build the imported `mini-elf-toolchain` and link the tensor object, harness, crt0 and mini-libc archive into ELF64 ET_EXEC;
+- [x] execute the result and require exact tensor values plus `tensor-elf-ok`;
+- [x] verify host-libc independence;
+- [x] pass PR #15 exact candidate run `34063095036`, normal-merge as `b7b8953712b6a496e33c7e30e9d44669a6c95b62`, and pass exact merged-main run `34063270273`;
+- [x] keep the claim bounded: imported Tiny-C does not compile the generated tensor C in this contract, and broad tensor-backend compatibility is not implied.
 
 ## Phase 5 — Portfolio consolidation
 
